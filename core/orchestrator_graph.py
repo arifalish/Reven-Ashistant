@@ -228,7 +228,12 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> A
 
 async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
     """Resumes the graph after approval/edit."""
-    from langgraph.types import Command
+    try:
+        from langgraph.types import Command
+        input_cmd = Command(resume=resume_payload)
+    except ImportError:
+        # Fallback if langgraph<0.2.20
+        input_cmd = resume_payload
 
     config = {"configurable": {"thread_id": str(chat_id)}}
 
@@ -238,7 +243,7 @@ async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
 
         final_state_dict = None
 
-        async for event in app_graph.astream(Command(resume=resume_payload), config=config, stream_mode="values"):
+        async for event in app_graph.astream(input_cmd, config=config, stream_mode="values"):
             final_state_dict = event
 
             # Check if execution got interrupted again (e.g. another credential needed)
