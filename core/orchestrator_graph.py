@@ -9,6 +9,7 @@ from langgraph.types import interrupt
 from core.blackboard_memory import BlackboardState, memory_manager
 from core.llm_router import router
 from core.skill_loader import skill_registry
+from core.credential_vault import credential_vault
 from workers.maps_scraper_worker import scraper_worker
 from middleware.quality_humanizer import clean_and_humanize
 from delivery.telegram_ux import create_workspace_zip
@@ -79,11 +80,20 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
 
 async def node_branch_c_tech(state: BlackboardState) -> Dict:
     """Phase 3 - Branch C: Tech & MVP Engine"""
+    # Simulate a dynamic requirement for an API key to complete tech branch
+    _ = credential_vault.get_or_request_credential(
+        state,
+        service_name="Vercel",
+        env_var_name="VERCEL_TOKEN",
+        setup_url="https://vercel.com/account/tokens"
+    )
+
     strategy = state.founder_strategy.get('summary', '')
     code_prompt = f"Build a single-file HTML/JS/CSS MVP landing page based on this strategy: {strategy}"
     code = await router.generate_tier2(code_prompt)
 
-    return {"replica_codebase": {"index.html": code}}
+    # Must return vault_data so the checkpointer persists any newly added credentials
+    return {"replica_codebase": {"index.html": code}, "vault_data": state.vault_data}
 
 async def node_aggregator(state: BlackboardState) -> Dict:
     """Wait for all parallel branches to finish and aggregate results."""
@@ -186,7 +196,7 @@ workflow.add_conditional_edges(
 
 workflow.add_edge("linter_humanizer", END)
 
-async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> bytes:
+async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> Any:
     """Executes the ingestion phase of the LangGraph pipeline up to HITL pause."""
     mission_id = str(uuid.uuid4())
 
@@ -202,11 +212,21 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> b
     async with AsyncSqliteSaver.from_conn_string("/tmp/langgraph_checkpoints.sqlite") as saver:
         await saver.setup()
         app_graph = workflow.compile(checkpointer=saver)
-        await app_graph.ainvoke(initial_state, config=config)
+
+        # We process stream to catch any interrupt payloads
+        async for event in app_graph.astream(initial_state, config=config, stream_mode="values"):
+            # Check if execution got interrupted
+            state_snapshot = await app_graph.aget_state(config)
+            if state_snapshot.next:
+                # Execution is interrupted. We check tasks.
+                for task in state_snapshot.tasks:
+                    if task.interrupts:
+                        # Return the interrupt payload to caller
+                        return task.interrupts[0].value
 
     return b""
 
-async def resume_orchestrator(chat_id: int, resume_payload: dict) -> bytes:
+async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
     """Resumes the graph after approval/edit."""
     from langgraph.types import Command
 
@@ -216,7 +236,19 @@ async def resume_orchestrator(chat_id: int, resume_payload: dict) -> bytes:
         await saver.setup()
         app_graph = workflow.compile(checkpointer=saver)
 
-        final_state_dict = await app_graph.ainvoke(Command(resume=resume_payload), config=config)
+        final_state_dict = None
+
+        async for event in app_graph.astream(Command(resume=resume_payload), config=config, stream_mode="values"):
+            final_state_dict = event
+
+            # Check if execution got interrupted again (e.g. another credential needed)
+            state_snapshot = await app_graph.aget_state(config)
+            if state_snapshot.next:
+                # Need to be careful not to return the interrupt we just cleared if state hasn't advanced
+                # Only return if it's a NEW interrupt
+                for task in state_snapshot.tasks:
+                    if task.interrupts and task.name != "hitl_gate":
+                        return task.interrupts[0].value
 
         if final_state_dict:
             state = BlackboardState(**final_state_dict)

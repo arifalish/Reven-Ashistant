@@ -23,10 +23,14 @@ async def test_end_to_end_orchestrator():
     message_id = 67890
     raw_thought = "I want to start a plumbing business in San Francisco."
 
-    # 1. Run orchestrator Phase 1 (Ingestion) -> should return empty bytes and pause at HITL
+    # Need to pre-fill the vault so node_branch_c_tech doesn't interrupt during resume
+    import os
+    os.environ["VERCEL_TOKEN"] = "mocked-vercel-token"
+
+    # 1. Run orchestrator Phase 1 (Ingestion) -> should return interrupt value and pause at HITL
     print("\\n[Test] Running Phase 1 (Ingestion)...")
     res1 = await run_orchestrator(raw_thought, chat_id, message_id)
-    assert res1 == b"", "Initial run should return empty bytes because it pauses at HITL"
+    assert res1 == "Please approve the strategy via Telegram callback.", "Initial run should return interrupt string"
 
     # 2. Resume with Approval (Phase 3 & 4)
     print("[Test] Resuming with Approval payload...")
@@ -35,6 +39,7 @@ async def test_end_to_end_orchestrator():
 
     # 3. Verify ZIP output
     assert res2 is not None and len(res2) > 0, "Resume should return a ZIP byte payload"
+    assert isinstance(res2, bytes), f"Expected bytes but got {type(res2)}: {res2}"
 
     # Unzip in memory to verify structure
     zip_buffer = io.BytesIO(res2)
@@ -45,4 +50,53 @@ async def test_end_to_end_orchestrator():
         assert "04_YouTube_Scripts_and_Scored_Hooks.md" in files
         assert "07_Replica_MVP_Codebase/index.html" in files
 
+
     print("[Test] Smoke test complete!")
+
+@pytest.mark.asyncio
+async def test_credential_vault_encryption():
+    from core.credential_vault import credential_vault
+
+    test_key = "secret_api_key_12345"
+    encrypted = credential_vault.encrypt(test_key)
+
+    assert encrypted != test_key
+    assert isinstance(encrypted, str)
+
+    decrypted = credential_vault.decrypt(encrypted)
+    assert decrypted == test_key
+
+@pytest.mark.asyncio
+async def test_credential_vault_interrupt_flow():
+    from core.blackboard_memory import BlackboardState
+    from core.credential_vault import credential_vault
+    import os
+
+    state = BlackboardState(mission_id="test-vault")
+
+    # Reset env for test predictability
+    if "TEST_SERVICE_KEY" in os.environ:
+        del os.environ["TEST_SERVICE_KEY"]
+
+    # Mocking interrupt is tricky outside of runnable context.
+    # Instead, we just mock the actual interrupt call in the credential_vault
+    import core.credential_vault
+    original_interrupt = core.credential_vault.interrupt
+    core.credential_vault.interrupt = lambda payload: {"api_key": "user_provided_key_from_telegram"}
+
+    try:
+        acquired_key = credential_vault.get_or_request_credential(
+            state, "TestService", "TEST_SERVICE_KEY", "https://example.com/api"
+        )
+
+        assert acquired_key == "user_provided_key_from_telegram"
+        assert os.environ.get("TEST_SERVICE_KEY") == "user_provided_key_from_telegram"
+
+        # Verify it saved to vault
+        assert "TestService" in state.vault_data
+        decrypted_vault_key = credential_vault.decrypt(state.vault_data["TestService"])
+        assert decrypted_vault_key == "user_provided_key_from_telegram"
+
+    finally:
+        # Restore interrupt
+        core.credential_vault.interrupt = original_interrupt

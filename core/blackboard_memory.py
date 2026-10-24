@@ -30,6 +30,9 @@ class BlackboardState(BaseModel):
 
     retries: int = Field(default=0)
 
+    # Encrypted Vault Data (Key-Value map of service -> encrypted string)
+    vault_data: Dict[str, str] = Field(default_factory=dict)
+
     # Stores the final structured content ready for RAM ZIP Packager
     final_artifacts: Dict[str, Any] = Field(default_factory=dict)
 

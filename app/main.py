@@ -96,14 +96,29 @@ async def process_mission(payload: dict):
 
         try:
             # Run the LangGraph Orchestrator (Phase 1, pauses at Phase 2)
-            await run_orchestrator(text, chat_id, message_id)
+            result_payload = await run_orchestrator(text, chat_id, message_id)
 
-            # Update status to waiting for approval
-            await telegram_ux.update_status(
-                chat_id=chat_id,
-                message_id=message_id,
-                status_text="⏳ Strategy Blueprint generated. Waiting for approval (Telegram HITL Gate)...\\nReply with inline button [✅ Approve & Launch All Agents], [🎯 Edit Target City/Niche], or [🛑 Cancel]."
-            )
+            if isinstance(result_payload, dict) and result_payload.get("type") == "credential_request":
+                # Very rare in Phase 1, but technically possible if ingestion requested a credential.
+                await telegram_ux.update_status(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    status_text=result_payload.get("message")
+                )
+            elif result_payload == "Please approve the strategy via Telegram callback.":
+                # Standard HITL approval string
+                await telegram_ux.update_status(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    status_text="⏳ Strategy Blueprint generated. Waiting for approval (Telegram HITL Gate)...\\nReply with inline button [✅ Approve & Launch All Agents], [🎯 Edit Target City/Niche], or [🛑 Cancel]."
+                )
+            else:
+                # Update status to waiting for approval as fallback
+                await telegram_ux.update_status(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    status_text="⏳ Strategy Blueprint generated. Waiting for approval (Telegram HITL Gate)...\\nReply with inline button [✅ Approve & Launch All Agents], [🎯 Edit Target City/Niche], or [🛑 Cancel]."
+                )
 
             # In a real telegram bot, we would attach actual Inline Keyboard Buttons here
 
@@ -121,7 +136,15 @@ async def process_mission(payload: dict):
         data = callback["data"]
         message_id = callback["message"]["message_id"]
 
-        if data == "approve_launch":
+        # Assume a standard format for API Key injection: "inject_api_key:<service_name>:<actual_key>"
+        # In a real bot, we would handle this via a dedicated state machine or command message handler.
+        # Since this relies on a callback query format for demonstration, we parse it here.
+        if data.startswith("inject_api_key:"):
+            _, service_name, actual_key = data.split(":", 2)
+            await telegram_ux.update_status(chat_id, message_id, f"🔑 API Key received for {service_name}. Resuming agent execution...")
+            resume_payload = {"api_key": actual_key}
+
+        elif data == "approve_launch":
             await telegram_ux.update_status(chat_id, message_id, "✅ Launch approved! Starting Massive Parallel Swarm Execution...")
             resume_payload = {"action": "approve"}
 
@@ -140,12 +163,13 @@ async def process_mission(payload: dict):
 
         try:
             # Resume execution of the graph
-            result_zip_bytes = await resume_orchestrator(chat_id, resume_payload)
+            result_payload = await resume_orchestrator(chat_id, resume_payload)
 
-            if result_zip_bytes and resume_payload["action"] == "approve":
+            # Since orchestrator can yield zip bytes OR a credential interrupt dict payload:
+            if isinstance(result_payload, bytes) and len(result_payload) > 0 and resume_payload.get("action") == "approve":
                 await telegram_ux.send_document(
                     chat_id=chat_id,
-                    document_bytes=result_zip_bytes,
+                    document_bytes=result_payload,
                     filename="Agent_OS_Workspace.zip",
                     caption="✅ Mission Accomplished! Here is your structured workspace."
                 )
@@ -155,6 +179,17 @@ async def process_mission(payload: dict):
                     message_id=message_id,
                     status_text="✅ Mission Completed Successfully! Zip delivered."
                 )
+            elif isinstance(result_payload, dict) and result_payload.get("type") == "credential_request":
+                # Handle the credential request interrupt sent back up from LangGraph
+                service_name = result_payload.get("service_name")
+                message = result_payload.get("message")
+                # Send this interactive message to user (in real bot, attach an inline button or listen for next text message)
+                await telegram_ux.update_status(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    status_text=message
+                )
+
         except Exception as e:
             await telegram_ux.update_status(
                 chat_id=chat_id,

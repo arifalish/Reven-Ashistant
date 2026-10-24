@@ -15,6 +15,8 @@ class Settings(BaseSettings):
 
     API_SECRET: str = "mock-secret"
 
+    VAULT_MASTER_KEY: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 settings = Settings()
