@@ -5,7 +5,10 @@ from typing import Dict, Any, List
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.types import interrupt
+try:
+    from langgraph.types import interrupt
+except ImportError:
+    def interrupt(val): return val
 from core.blackboard_memory import BlackboardState, memory_manager
 from core.llm_router import router
 from core.skill_loader import skill_registry
