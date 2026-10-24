@@ -1,0 +1,1 @@
+# founder-skill SKILL DEFINITION

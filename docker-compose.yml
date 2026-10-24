@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  agent-os:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-mock-nvidia-key}
+      - GROQ_API_KEY=${GROQ_API_KEY:-mock-groq-key}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-mock-gemini-key}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-mock-telegram-token}
+      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL:-redis://mock-url:6379}
+      - CF_GATEWAY_URL=${CF_GATEWAY_URL:-https://gateway.ai.cloudflare.com/v1/mock-account/mock-gateway}
+      - API_SECRET=${API_SECRET:-mock-secret}
+
+  maps-scraper:
+    image: gosom/google-maps-scraper
+    ports:
+      - "8080:8080"
