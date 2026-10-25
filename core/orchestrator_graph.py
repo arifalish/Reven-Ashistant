@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from core.blackboard_memory import BlackboardState, memory_manager
 from core.llm_router import router
@@ -13,6 +14,7 @@ from core.credential_vault import credential_vault
 from workers.maps_scraper_worker import scraper_worker
 from middleware.quality_humanizer import clean_and_humanize
 from delivery.telegram_ux import create_workspace_zip
+from skills.browser_agent import run_browser_task
 
 async def node_ingestion(state: BlackboardState) -> Dict:
     """Phase 1: Ingestion & Strategy Blueprint"""
@@ -71,6 +73,25 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
         router.generate_tier3(ig_prompt),
         router.generate_tier3(x_prompt)
     )
+
+    # Dynamic LLM routing to the browser tool if requested by the user
+    # Binds the LangChain tool and parses it into a ToolNode equivalent output
+    if "post to twitter" in state.raw_thought.lower():
+        tool_node = ToolNode([run_browser_task])
+        # We manually invoke the node here inside the branch for demonstration.
+        # In a real expanded graph, this would be its own standalone node edge.
+        from langchain_core.messages import AIMessage
+        msg = AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "run_browser_task",
+                "args": {"task_description": f"Log into twitter and post this thread: {results[2]}"},
+                "id": "call_123"
+            }]
+        )
+        browser_res = await tool_node.ainvoke({"messages": [msg]})
+        log_output = browser_res["messages"][-1].content
+        results[2] += f"\n\n[Browser execution log: {log_output}]"
 
     return {
         "yt_scripts": [results[0]],
