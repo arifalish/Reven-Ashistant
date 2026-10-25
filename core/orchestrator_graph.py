@@ -120,8 +120,8 @@ async def node_self_correction(state: BlackboardState) -> Dict:
 
 def check_correction(state: BlackboardState):
     """Conditional Edge for self-correction routing"""
-    # For simplicity, if we incremented retries, it means we ran correction, but we just
-    # check condition and move to humanizer if done. A real implementation loops, here we just move on.
+    if state.retries < 2 and "(Rewrite" in str(state.yt_scripts):
+        return "self_correction"
     return "linter_humanizer"
 
 async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
@@ -167,12 +167,14 @@ workflow.set_entry_point("ingestion")
 workflow.add_edge("ingestion", "hitl_gate")
 
 # Conditional Edge for HITL Gate
+# In langgraph <0.3 parallel conditional edges require a slightly different approach
+# or just unconditional edges if they always run on approval.
 workflow.add_conditional_edges(
     "hitl_gate",
     check_hitl_routing,
     {
         "ingestion": "ingestion",
-        "branch_a_sales": "branch_a_sales"
+        "branch_a_sales": "branch_a_sales",
     }
 )
 # The other parallel branches
@@ -215,14 +217,16 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> A
 
         # We process stream to catch any interrupt payloads
         async for event in app_graph.astream(initial_state, config=config, stream_mode="values"):
-            # Check if execution got interrupted
-            state_snapshot = await app_graph.aget_state(config)
-            if state_snapshot.next:
-                # Execution is interrupted. We check tasks.
-                for task in state_snapshot.tasks:
-                    if task.interrupts:
-                        # Return the interrupt payload to caller
-                        return task.interrupts[0].value
+            pass
+
+        # Check if execution got interrupted
+        state_snapshot = await app_graph.aget_state(config)
+        if state_snapshot.next:
+            # Execution is interrupted. We check tasks.
+            for task in state_snapshot.tasks:
+                if task.interrupts:
+                    # Return the interrupt payload to caller
+                    return task.interrupts[0].value
 
     return b""
 
