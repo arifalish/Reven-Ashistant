@@ -228,32 +228,36 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> A
 
 async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
     """Resumes the graph after approval/edit."""
+    config = {"configurable": {"thread_id": str(chat_id)}}
+    async with AsyncSqliteSaver.from_conn_string("/tmp/langgraph_checkpoints.sqlite") as saver:
+        await saver.setup()
+        app_graph = workflow.compile(checkpointer=saver)
+
     try:
         from langgraph.types import Command
-        input_cmd = Command(resume=resume_payload)
     except ImportError:
-        # Fallback if langgraph<0.2.20
-        input_cmd = resume_payload
+        try:
+            from langgraph.graph.message import Command
+        except ImportError:
+            class Command:
+                def __init__(self, **kwargs):
+                    self.__dict__.update(kwargs)
 
-    config = {"configurable": {"thread_id": str(chat_id)}}
+    input_cmd = Command(resume=resume_payload)
 
     async with AsyncSqliteSaver.from_conn_string("/tmp/langgraph_checkpoints.sqlite") as saver:
         await saver.setup()
         app_graph = workflow.compile(checkpointer=saver)
 
         final_state_dict = None
-
         async for event in app_graph.astream(input_cmd, config=config, stream_mode="values"):
             final_state_dict = event
 
-            # Check if execution got interrupted again (e.g. another credential needed)
-            state_snapshot = await app_graph.aget_state(config)
-            if state_snapshot.next:
-                # Need to be careful not to return the interrupt we just cleared if state hasn't advanced
-                # Only return if it's a NEW interrupt
-                for task in state_snapshot.tasks:
-                    if task.interrupts and task.name != "hitl_gate":
-                        return task.interrupts[0].value
+        state_snapshot = await app_graph.aget_state(config)
+        if state_snapshot.next:
+            for task in state_snapshot.tasks:
+                if task.interrupts and task.name != "hitl_gate":
+                    return task.interrupts[0].value
 
         if final_state_dict:
             state = BlackboardState(**final_state_dict)
