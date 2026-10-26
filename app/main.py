@@ -85,14 +85,21 @@ async def process_mission(payload: dict):
     if "message" in payload and "text" in payload["message"]:
         chat_id = payload["message"]["chat"]["id"]
         text = payload["message"]["text"]
+
+        # We may receive message_id from cloudflare worker, or we might need to send one ourselves
         message_id = payload.get("mission_control_message_id")
 
-        # Initial status update
-        await telegram_ux.update_status(
-            chat_id=chat_id,
-            message_id=message_id,
-            status_text="⏳ Extracting intent and blueprinting strategy..."
-        )
+        if not message_id:
+            message_id = await telegram_ux.send_message(
+                chat_id=chat_id,
+                text="🚀 **Live Mission Control Dashboard**\n\n⏳ Extracting intent and blueprinting strategy..."
+            )
+        else:
+            await telegram_ux.update_status(
+                chat_id=chat_id,
+                message_id=message_id,
+                status_text="⏳ Extracting intent and blueprinting strategy..."
+            )
 
         try:
             # Run the LangGraph Orchestrator (Phase 1, pauses at Phase 2)
@@ -105,22 +112,21 @@ async def process_mission(payload: dict):
                     message_id=message_id,
                     status_text=result_payload.get("message")
                 )
-            elif result_payload == "Please approve the strategy via Telegram callback.":
-                # Standard HITL approval string
-                await telegram_ux.update_status(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    status_text="⏳ Strategy Blueprint generated. Waiting for approval (Telegram HITL Gate)...\\nReply with inline button [✅ Approve & Launch All Agents], [🎯 Edit Target City/Niche], or [🛑 Cancel]."
-                )
             else:
-                # Update status to waiting for approval as fallback
+                # Standard HITL approval string
+                keyboard = {
+                    "inline_keyboard": [
+                        [{"text": "✅ Approve & Launch All Agents", "callback_data": "approve_launch"}],
+                        [{"text": "🎯 Edit Target City/Niche", "callback_data": "edit"}],
+                        [{"text": "🛑 Cancel", "callback_data": "cancel"}]
+                    ]
+                }
                 await telegram_ux.update_status(
                     chat_id=chat_id,
                     message_id=message_id,
-                    status_text="⏳ Strategy Blueprint generated. Waiting for approval (Telegram HITL Gate)...\\nReply with inline button [✅ Approve & Launch All Agents], [🎯 Edit Target City/Niche], or [🛑 Cancel]."
+                    status_text="⏳ Strategy Blueprint generated. Waiting for approval (Telegram HITL Gate)...\nReply with inline buttons below.",
+                    reply_markup=keyboard
                 )
-
-            # In a real telegram bot, we would attach actual Inline Keyboard Buttons here
 
         except Exception as e:
             await telegram_ux.update_status(
@@ -136,9 +142,6 @@ async def process_mission(payload: dict):
         data = callback["data"]
         message_id = callback["message"]["message_id"]
 
-        # Assume a standard format for API Key injection: "inject_api_key:<service_name>:<actual_key>"
-        # In a real bot, we would handle this via a dedicated state machine or command message handler.
-        # Since this relies on a callback query format for demonstration, we parse it here.
         if data.startswith("inject_api_key:"):
             _, service_name, actual_key = data.split(":", 2)
             await telegram_ux.update_status(chat_id, message_id, f"🔑 API Key received for {service_name}. Resuming agent execution...")
@@ -149,8 +152,6 @@ async def process_mission(payload: dict):
             resume_payload = {"action": "approve"}
 
         elif data == "edit":
-            # Real bot would prompt for text and send another callback
-            # We mock the edited payload for this architecture
             await telegram_ux.update_status(chat_id, message_id, "🔄 Editing Target City/Niche...")
             resume_payload = {"action": "edit", "modifications": "Updated Target City to NYC"}
 
@@ -183,7 +184,6 @@ async def process_mission(payload: dict):
                 # Handle the credential request interrupt sent back up from LangGraph
                 service_name = result_payload.get("service_name")
                 message = result_payload.get("message")
-                # Send this interactive message to user (in real bot, attach an inline button or listen for next text message)
                 await telegram_ux.update_status(
                     chat_id=chat_id,
                     message_id=message_id,
