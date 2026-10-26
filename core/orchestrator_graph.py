@@ -5,8 +5,10 @@ from typing import Dict, Any, List
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.prebuilt import ToolNode
-from langgraph.types import interrupt
+try:
+    from langgraph.types import interrupt
+except ImportError:
+    def interrupt(val): return val
 from core.blackboard_memory import BlackboardState, memory_manager
 from core.llm_router import router
 from core.skill_loader import skill_registry
@@ -270,7 +272,14 @@ async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
     async with AsyncSqliteSaver.from_conn_string("/tmp/langgraph_checkpoints.sqlite") as saver:
         await saver.setup()
         app_graph = workflow.compile(checkpointer=saver)
-
+try:
+    from langgraph.types import Command
+except ImportError:
+    try:
+        from langgraph.graph.message import Command
+    except ImportError:
+        class Command:
+            def __init__(self, **kwargs): self.__dict__.update(kwargs)
         final_state_dict = None
         async for event in app_graph.astream(input_cmd, config=config, stream_mode="values"):
             final_state_dict = event
