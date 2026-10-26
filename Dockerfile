@@ -17,6 +17,7 @@ COPY delivery/ delivery/
 COPY middleware/ middleware/
 COPY workers/ workers/
 COPY scripts/ scripts/
+COPY skills/ skills/
 
 # Run the bootstrap script for skills
 RUN chmod +x scripts/bootstrap_skills.sh && ./scripts/bootstrap_skills.sh
