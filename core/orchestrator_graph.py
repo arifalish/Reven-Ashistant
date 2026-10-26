@@ -254,9 +254,6 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> A
 async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
     """Resumes the graph after approval/edit."""
     config = {"configurable": {"thread_id": str(chat_id)}}
-    async with AsyncSqliteSaver.from_conn_string("/tmp/langgraph_checkpoints.sqlite") as saver:
-        await saver.setup()
-        app_graph = workflow.compile(checkpointer=saver)
 
     try:
         from langgraph.types import Command
