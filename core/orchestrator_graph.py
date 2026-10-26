@@ -16,6 +16,7 @@ from core.credential_vault import credential_vault
 from workers.maps_scraper_worker import scraper_worker
 from middleware.quality_humanizer import clean_and_humanize
 from delivery.telegram_ux import create_workspace_zip
+from skills.browser_agent import run_browser_task
 
 async def node_ingestion(state: BlackboardState) -> Dict:
     """Phase 1: Ingestion & Strategy Blueprint"""
@@ -75,6 +76,25 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
         router.generate_tier3(x_prompt)
     )
 
+    # Dynamic LLM routing to the browser tool if requested by the user
+    # Binds the LangChain tool and parses it into a ToolNode equivalent output
+    if "post to twitter" in state.raw_thought.lower():
+        tool_node = ToolNode([run_browser_task])
+        # We manually invoke the node here inside the branch for demonstration.
+        # In a real expanded graph, this would be its own standalone node edge.
+        from langchain_core.messages import AIMessage
+        msg = AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "run_browser_task",
+                "args": {"task_description": f"Log into twitter and post this thread: {results[2]}"},
+                "id": "call_123"
+            }]
+        )
+        browser_res = await tool_node.ainvoke({"messages": [msg]})
+        log_output = browser_res["messages"][-1].content
+        results[2] += f"\n\n[Browser execution log: {log_output}]"
+
     return {
         "yt_scripts": [results[0]],
         "ig_reels": [results[1]],
@@ -123,8 +143,8 @@ async def node_self_correction(state: BlackboardState) -> Dict:
 
 def check_correction(state: BlackboardState):
     """Conditional Edge for self-correction routing"""
-    # For simplicity, if we incremented retries, it means we ran correction, but we just
-    # check condition and move to humanizer if done. A real implementation loops, here we just move on.
+    if state.retries < 2 and "(Rewrite" in str(state.yt_scripts):
+        return "self_correction"
     return "linter_humanizer"
 
 async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
@@ -170,12 +190,14 @@ workflow.set_entry_point("ingestion")
 workflow.add_edge("ingestion", "hitl_gate")
 
 # Conditional Edge for HITL Gate
+# In langgraph <0.3 parallel conditional edges require a slightly different approach
+# or just unconditional edges if they always run on approval.
 workflow.add_conditional_edges(
     "hitl_gate",
     check_hitl_routing,
     {
         "ingestion": "ingestion",
-        "branch_a_sales": "branch_a_sales"
+        "branch_a_sales": "branch_a_sales",
     }
 )
 # The other parallel branches
@@ -218,27 +240,34 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> A
 
         # We process stream to catch any interrupt payloads
         async for event in app_graph.astream(initial_state, config=config, stream_mode="values"):
-            # Check if execution got interrupted
-            state_snapshot = await app_graph.aget_state(config)
-            if state_snapshot.next:
-                # Execution is interrupted. We check tasks.
-                for task in state_snapshot.tasks:
-                    if task.interrupts:
-                        # Return the interrupt payload to caller
-                        return task.interrupts[0].value
+            pass
+
+        # Check if execution got interrupted
+        state_snapshot = await app_graph.aget_state(config)
+        if state_snapshot.next:
+            # Execution is interrupted. We check tasks.
+            for task in state_snapshot.tasks:
+                if task.interrupts:
+                    # Return the interrupt payload to caller
+                    return task.interrupts[0].value
 
     return b""
 
 async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
     """Resumes the graph after approval/edit."""
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
     try:
         from langgraph.types import Command
-        input_cmd = Command(resume=resume_payload)
     except ImportError:
-        # Fallback if langgraph<0.2.20
-        input_cmd = resume_payload
+        try:
+            from langgraph.graph.message import Command
+        except ImportError:
+            class Command:
+                def __init__(self, **kwargs):
+                    self.__dict__.update(kwargs)
 
-    config = {"configurable": {"thread_id": str(chat_id)}}
+    input_cmd = Command(resume=resume_payload)
 
     async with AsyncSqliteSaver.from_conn_string("/tmp/langgraph_checkpoints.sqlite") as saver:
         await saver.setup()
@@ -252,18 +281,14 @@ except ImportError:
         class Command:
             def __init__(self, **kwargs): self.__dict__.update(kwargs)
         final_state_dict = None
-
         async for event in app_graph.astream(input_cmd, config=config, stream_mode="values"):
             final_state_dict = event
 
-            # Check if execution got interrupted again (e.g. another credential needed)
-            state_snapshot = await app_graph.aget_state(config)
-            if state_snapshot.next:
-                # Need to be careful not to return the interrupt we just cleared if state hasn't advanced
-                # Only return if it's a NEW interrupt
-                for task in state_snapshot.tasks:
-                    if task.interrupts and task.name != "hitl_gate":
-                        return task.interrupts[0].value
+        state_snapshot = await app_graph.aget_state(config)
+        if state_snapshot.next:
+            for task in state_snapshot.tasks:
+                if task.interrupts and task.name != "hitl_gate":
+                    return task.interrupts[0].value
 
         if final_state_dict:
             state = BlackboardState(**final_state_dict)
