@@ -30,4 +30,4 @@ def test_supervisor_routes_compound_request_to_multiple_agents():
         raw_thought="Build a website and write SEO content",
         next_nodes=["branch_c_tech", "branch_b_content"],
     )
-    assert check_supervisor_routing(state) == ["branch_c_tech", "branch_b_content"]
+    assert check_supervisor_routing(state) == ["skill_swarm_node"]
