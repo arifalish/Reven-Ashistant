@@ -42,6 +42,11 @@ async def test_queue_retries_failed_tasks_with_bounded_attempts():
 
     retried = await queue.dequeue()
     assert retried.attempts == 1
-    assert await queue.retry(retried, max_attempts=3) is False
+    assert await queue.retry(retried, max_attempts=3) is True
+    queue.task_done()
+
+    final_attempt = await queue.dequeue()
+    assert final_attempt.attempts == 2
+    assert await queue.retry(final_attempt, max_attempts=3) is False
     queue.task_done()
     await queue.join()
