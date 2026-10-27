@@ -16,13 +16,20 @@ from workers.maps_scraper_worker import scraper_worker
 from middleware.quality_humanizer import clean_and_humanize
 from skills.browser_agent import run_browser_task
 
-from core.supervisor_router import analyze_task_and_route
+from core.supervisor_router import analyze_task_and_route\nfrom core.skill_supervisor import plan_skills, execute_skill_plan, SKILL_REGISTRY, DEPARTMENT_NODES
 
 async def node_supervisor(state: BlackboardState) -> Dict:
     """Phase 1: Dynamic Supervisor & Routing"""
 
-    # 1. Decide routing
+    # 1. Select exact skill workers, then map their departments for reporting/compatibility.
     next_nodes = await analyze_task_and_route(state.raw_thought)
+    skill_plan = await plan_skills(state.raw_thought)
+    selected_skills = skill_plan["selected_skills"]
+    if "general_chat" not in next_nodes:
+        selected_departments = list(dict.fromkeys(SKILL_REGISTRY[s]["department"] for s in selected_skills))
+        next_nodes = list(dict.fromkeys(
+            [DEPARTMENT_NODES[d] for d in selected_departments if d in DEPARTMENT_NODES]
+        )) or ["branch_d_coworker"]
 
     # 2. If it's just a general chat, generate response immediately
     general_response = ""
@@ -37,6 +44,8 @@ async def node_supervisor(state: BlackboardState) -> Dict:
 
     return {
         "next_nodes": next_nodes,
+        "selected_skills": selected_skills,
+        "skill_plan_reasoning": skill_plan["reasoning"],
         "general_response": general_response,
         "founder_strategy": state.founder_strategy
     }
@@ -69,9 +78,8 @@ def check_supervisor_routing(state: BlackboardState):
     if "(Edit:" in state.raw_thought:
         return ["supervisor"]
 
-    # Launch approved branches in parallel
-    valid_branches = [n for n in state.next_nodes if n != "general_chat"]
-    return valid_branches
+    # The central skill swarm executes the validated skill DAG; workers are parallelized by wave.
+    return ["skill_swarm_node"]
 
 async def node_general_chat(state: BlackboardState) -> Dict:
     """Handles general conversational queries."""
@@ -178,8 +186,25 @@ async def node_branch_d_coworker(state: BlackboardState) -> Dict:
     log_output = res["messages"][-1].content
     return {"opendots_log": f"{founder}\n\n{master}\n\n{arena_review}\n\n{opendots_plan}\n\n{log_output}"}
 
+async def node_skill_swarm(state: BlackboardState) -> Dict:
+    """Run the supervisor-selected skills as parallel DAG waves over a shared blackboard."""
+    artifacts = await execute_skill_plan(
+        state.raw_thought,
+        selected_skills=state.selected_skills,
+        context={
+            "mission_id": state.mission_id,
+            "chat_id": state.chat_id,
+            "strategy": state.founder_strategy.get("summary", ""),
+        },
+    )
+    return {
+        "skill_results": artifacts.get("skills", {}),
+        "final_artifacts": artifacts,
+    }
+
+
 async def node_aggregator(state: BlackboardState) -> Dict:
-    """Wait for all parallel branches to finish and aggregate results."""
+    """Join point for the skill swarm and compatibility branches."""
     return {}
 
 async def node_self_correction(state: BlackboardState) -> Dict:
@@ -212,6 +237,22 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
 
     report_sections = []
     report_sections.append(f"### 🧠 Master Strategy\n{state.founder_strategy.get('summary', '')}\n")
+    if state.selected_skills:
+        report_sections.append(
+            "### 🗂️ Supervisor Execution Plan\n"
+            + ", ".join(state.selected_skills)
+            + f"\n\nReason: {state.skill_plan_reasoning}"
+        )
+    if state.skill_results:
+        report_sections.append("### 🤖 Specialized Skill Results")
+        for skill_id in state.selected_skills:
+            result = state.skill_results.get(skill_id)
+            if not result:
+                continue
+            if result.get("status") == "failed":
+                report_sections.append(f"**{skill_id} — failed**\n{result.get('error', 'Unknown error')}")
+            else:
+                report_sections.append(f"**{skill_id}**\n{result.get('output', '')}")
 
     if "branch_a_sales" in state.next_nodes:
         humanized_b2b = [clean_and_humanize(email) for email in state.b2b_emails if email]
@@ -261,6 +302,7 @@ workflow.add_node("supervisor", node_supervisor)
 workflow.add_node("hitl_gate", node_hitl_gate)
 workflow.add_node("general_chat_node", node_general_chat)
 workflow.add_node("cancelled_node", node_cancelled)
+workflow.add_node("skill_swarm_node", node_skill_swarm)
 
 workflow.add_node("branch_a_sales", node_branch_a_sales)
 workflow.add_node("branch_b_content", node_branch_b_content)
@@ -278,13 +320,15 @@ workflow.add_edge("supervisor", "hitl_gate")
 workflow.add_conditional_edges(
     "hitl_gate",
     check_supervisor_routing,
-    ["general_chat_node", "cancelled_node", "branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker", "supervisor"]
+    ["general_chat_node", "cancelled_node", "skill_swarm_node", "branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker", "supervisor"]
 )
 
 # Route general chat directly to end
 workflow.add_edge("general_chat_node", END)
 workflow.add_edge("cancelled_node", END)
+workflow.add_edge("skill_swarm_node", "aggregator")
 
+# Legacy department branches remain registered for compatibility with saved checkpoints.
 # Branch in
 workflow.add_edge("branch_a_sales", "aggregator")
 workflow.add_edge("branch_b_content", "aggregator")
