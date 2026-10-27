@@ -168,14 +168,21 @@ async def process_mission(payload: dict):
 
 
             if isinstance(result_payload, dict) and result_payload.get("type") == "credential_request":
-                # Very rare in Phase 1, but technically possible if ingestion requested a credential.
                 await telegram_bot.update_status(
                     chat_id=chat_id,
                     message_id=message_id,
                     status_text=result_payload.get("message")
                 )
+            elif isinstance(result_payload, str) and result_payload.strip() and result_payload != "Please approve the strategy via Telegram callback.":
+                # General chat completes immediately; it must not be shown an approval keyboard.
+                await telegram_bot.send_message(chat_id=chat_id, text=result_payload[:4000])
+                await telegram_bot.update_status(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    status_text="✅ Response delivered."
+                )
             else:
-                # Standard HITL approval string
+                # Work tasks pause at the LangGraph human-approval gate.
                 keyboard = {
                     "inline_keyboard": [
                         [{"text": "✅ Approve & Launch All Agents", "callback_data": "approve_launch"}],
