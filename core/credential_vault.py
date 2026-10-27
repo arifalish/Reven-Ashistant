@@ -12,7 +12,19 @@ class CredentialVault:
         if settings.VAULT_MASTER_KEY:
             self.key = settings.VAULT_MASTER_KEY.encode()
         else:
-            self.key = Fernet.generate_key()
+            # Fallback to a stable derived key instead of generating ephemeral one
+            # This ensures decryption works across requests even if VAULT_MASTER_KEY is omitted
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+            import base64
+
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=b'agent-os-fallback-salt',
+                iterations=100000,
+            )
+            self.key = base64.urlsafe_b64encode(kdf.derive(b'default-fallback-password-do-not-use-in-prod'))
 
         self.fernet = Fernet(self.key)
 
@@ -30,6 +42,8 @@ class CredentialVault:
         """
         # 1. Check OS Env
         env_val = os.getenv(env_var_name)
+        if not env_val and env_var_name == 'VERCEL_TOKEN':
+            env_val = os.getenv('VERCEL_API_KEY')
         if env_val:
             return env_val
 
@@ -48,7 +62,7 @@ class CredentialVault:
             "type": "credential_request",
             "service_name": service_name,
             "setup_url": setup_url,
-            "message": f"⚠️ Agent needs API Key for {service_name}. Get it here: {setup_url}\\nReply on Telegram to securely inject."
+            "message": f"⚠️ Agent needs API Key for {service_name}. Get it here: {setup_url}\nReply on Telegram to securely inject."
         }
 
         # Pauses execution. When resumed via Command(resume={"api_key": "..."}) this will return.
