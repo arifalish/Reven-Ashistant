@@ -73,10 +73,8 @@ def deterministic_skill_plan(query: str) -> List[str]:
                     wanted.add(prerequisite)
                     changed = True
     ordered = [skill_id for skill_id in SKILL_REGISTRY if skill_id in wanted]
-    # Humanizer is a final pass only when the request creates content/outreach.
-    if len(ordered) > 1 and any(SKILL_REGISTRY[s]["department"] == "content" or s == "sales-desk-skill" for s in ordered):
-        ordered = [s for s in ordered if s != "humanizer-core-skill"] + ["humanizer-core-skill"]
-    return ordered
+    # Return a dependency-safe sequence; each wave may still execute concurrently.
+    return [skill_id for wave in _ready_waves(ordered) for skill_id in wave]
 
 
 def _parse_plan(raw: str) -> List[str]:
