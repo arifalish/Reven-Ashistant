@@ -27,8 +27,9 @@ async def test_end_to_end_orchestrator():
     import os
     os.environ["VERCEL_TOKEN"] = "mocked-vercel-token"
 
+
     # 1. Run orchestrator Phase 1 (Ingestion) -> should return interrupt value and pause at HITL
-    print("\\n[Test] Running Phase 1 (Ingestion)...")
+    print("\n[Test] Running Phase 1 (Ingestion)...")
     res1 = await run_orchestrator(raw_thought, chat_id, message_id)
     assert res1 == "Please approve the strategy via Telegram callback.", "Initial run should return interrupt string"
 
@@ -37,18 +38,15 @@ async def test_end_to_end_orchestrator():
     resume_payload = {"action": "approve"}
     res2 = await resume_orchestrator(chat_id, resume_payload)
 
-    # 3. Verify ZIP output
-    assert res2 is not None and len(res2) > 0, "Resume should return a ZIP byte payload"
-    assert isinstance(res2, bytes), f"Expected bytes but got {type(res2)}: {res2}"
+    # 3. Verify final_report output
+    assert res2 is not None and len(res2) > 0, "Resume should return a string payload"
+    assert isinstance(res2, str), f"Expected str but got {type(res2)}: {res2}"
 
-    # Unzip in memory to verify structure
-    zip_buffer = io.BytesIO(res2)
-    with zipfile.ZipFile(zip_buffer, "r") as zip_file:
-        files = zip_file.namelist()
-        print(f"[Test] ZIP contents: {files}")
-        assert "01_Founder_Strategy_and_Unit_Economics.md" in files
-        assert "04_YouTube_Scripts_and_Scored_Hooks.md" in files
-        assert "07_Replica_MVP_Codebase/index.html" in files
+    print(f"[Test] Final Report length: {len(res2)}")
+    assert "### 🧠 Master Strategy" in res2
+    assert "### 🎯 Sales & Leads" in res2
+    assert "### 💻 Tech & MVP" in res2
+
 
 
     print("[Test] Smoke test complete!")
