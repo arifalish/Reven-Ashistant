@@ -17,7 +17,7 @@ SKILL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "youtube-agent-skill": {"department": "content", "description": "YouTube scripts, titles, thumbnail concepts and retention.", "keywords": r"youtube|video script|thumbnail|video"},
     "linkedin-agent-skill": {"department": "content", "description": "LinkedIn posts, profile positioning, carousels and professional outreach.", "keywords": r"linkedin|professional post"},
     "x-agent-skill": {"department": "content", "description": "X/Twitter posts, threads and social hooks.", "keywords": r"twitter|\bx\b|thread"},
-    "founder-skill": {"department": "strategy", "description": "Startup strategy, product validation, go-to-market and unit economics.", "keywords": r"startup|founder|business plan|validate|strategy"},
+    "founder-skill": {"department": "strategy", "description": "Startup strategy, product validation, go-to-market and unit economics.", "keywords": r"startup|founder|business|validate|strategy"},
     "trader-skill": {"department": "strategy", "description": "Market and portfolio analysis with explicit assumptions and risk caveats.", "keywords": r"trading|portfolio|stock|market analysis|investment"},
     "replica-skill": {"department": "engineering", "description": "Software architecture, implementation plans, code and product parity.", "keywords": r"code|coding|build|develop|web app|mobile app|api|debug|software|repository|github|deploy"},
     "arena-skill": {"department": "engineering", "description": "Review complex engineering solutions, compare approaches and identify defects.", "keywords": r"complex code|review code|code tournament|architecture|debug"},
