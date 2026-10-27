@@ -57,6 +57,9 @@ def deterministic_skill_plan(query: str) -> List[str]:
     ]
     if not selected:
         selected = ["master-skills"]
+    # Generated content and outreach receive a final quality/humanization pass.
+    if "sales-desk-skill" in selected or any(SKILL_REGISTRY[s]["department"] == "content" for s in selected):
+        selected.append("humanizer-core-skill")
     # If a lead-sourcing task requests outreach or website research, include its prerequisites.
     if "sales-desk-skill" in selected and re.search(r"scrape|google maps|companies in|business leads|latest news|website", text, re.I):
         selected.extend(["google-maps-scraper-kit", "browser-agent-skill"])
