@@ -5,6 +5,7 @@ dependencies are respected in waves. Results are written to a shared artifact bl
 """
 import asyncio
 import json
+import os
 import re
 from typing import Any, Dict, List
 
@@ -150,10 +151,52 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 "Do not invent scraped records, news, metrics, tool execution, or completed external actions. "
                 "If an external connector/service is unavailable, clearly label the limitation and provide a useful next step."
             )
-            result = await skill_registry.execute_skill(
-                skill_id, task,
-                context={**shared_context, "blackboard_artifacts": artifacts["skills"], "prior_artifacts_json": prior},
-            )
+            worker_context = {**shared_context, "blackboard_artifacts": artifacts["skills"], "prior_artifacts_json": prior}
+
+            if skill_id == "google-maps-scraper-kit":
+                from workers.maps_scraper_worker import MapsScraperWorker
+                target_prompt = (
+                    "Extract a city and business category from this request. Return only JSON "
+                    '{"city":"...","category":"..."}. If either is unclear, use an empty string. '
+                    f"Request: {query}"
+                )
+                city, category = "", ""
+                try:
+                    target_raw = await router.generate_tier1(target_prompt)
+                    target_match = re.search(r"\\{[\\s\\S]*\\}", target_raw)
+                    target = json.loads(target_match.group(0)) if target_match else {}
+                    city = str(target.get("city", "")).strip()
+                    category = str(target.get("category", "")).strip()
+                except Exception:
+                    pass
+                if not city:
+                    city_match = re.search(r"\\b(?:in|from|of)\\s+([A-Z][A-Za-z]+(?:\\s+[A-Z][A-Za-z]+){0,2})", query)
+                    hindi_match = re.search(r"\\b([A-Z][A-Za-z]+)\\s+ke\\b", query, re.I)
+                    city = (city_match or hindi_match).group(1) if (city_match or hindi_match) else ""
+                if not category:
+                    category_match = re.search(r"\\b(IT companies|software companies|restaurants|hotels|hospitals|schools|colleges|real estate agencies|manufacturers|law firms)\\b", query, re.I)
+                    category = category_match.group(1) if category_match else ""
+                if not city or not category:
+                    return skill_id, "Scraper not run: city or business category could not be reliably extracted. Please include both."
+                csv_result = await MapsScraperWorker().scrape_leads(city, category)
+                return skill_id, f"Target: {category} in {city}\\n{csv_result}"
+
+            if skill_id == "browser-agent-skill":
+                if not os.getenv("OPENAI_API_KEY"):
+                    return skill_id, "Browser execution unavailable: set OPENAI_API_KEY for browser-use's vision model. No website was opened."
+                from skills.browser_agent import run_browser_task
+                browser_task = (
+                    f"Research this request using read-only browser actions where possible: {query}. "
+                    "Return the URLs visited, current factual findings, and any uncertainty. "
+                    "Do not submit forms, send messages, purchase items, or make irreversible changes."
+                )
+                browser_result = await asyncio.to_thread(
+                    run_browser_task.invoke,
+                    {"task": browser_task, "context": worker_context, "headless": True},
+                )
+                return skill_id, str(browser_result)
+
+            result = await skill_registry.execute_skill(skill_id, task, context=worker_context)
             return skill_id, result
 
         results = await asyncio.gather(*(run_one(skill_id) for skill_id in wave), return_exceptions=True)
