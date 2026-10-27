@@ -51,12 +51,18 @@ async def node_hitl_gate(state: BlackboardState) -> Dict:
     if "(Edit:" in state.raw_thought:
         return {}
 
-    # Pause execution for approval
-    _ = interrupt("Please approve the strategy via Telegram callback.")
+    # Pause execution for explicit approval; preserve cancellation as a graph decision.
+    decision = interrupt("Please approve the strategy via Telegram callback.")
+    if isinstance(decision, dict) and decision.get("action") == "cancel":
+        return {"next_nodes": ["cancelled"]}
+    if isinstance(decision, dict) and decision.get("action") not in (None, "approve", "edit"):
+        return {"next_nodes": ["cancelled"]}
     return {}
 
 def check_supervisor_routing(state: BlackboardState):
     """Route to appropriate nodes based on supervisor decision."""
+    if "cancelled" in state.next_nodes:
+        return ["cancelled_node"]
     if "general_chat" in state.next_nodes:
         return ["general_chat_node"]
 
@@ -70,6 +76,10 @@ def check_supervisor_routing(state: BlackboardState):
 async def node_general_chat(state: BlackboardState) -> Dict:
     """Handles general conversational queries."""
     return {"final_report": state.general_response}
+
+async def node_cancelled(state: BlackboardState) -> Dict:
+    """Terminate a mission after an explicit user cancellation."""
+    return {"final_report": "Mission cancelled by user. No agent branches were executed."}
 async def node_branch_a_sales(state: BlackboardState) -> Dict:
     """Execute sales, lead and LinkedIn skills for a sales task."""
     strategy = state.founder_strategy.get("summary", "")
@@ -230,6 +240,7 @@ workflow = StateGraph(BlackboardState)
 workflow.add_node("supervisor", node_supervisor)
 workflow.add_node("hitl_gate", node_hitl_gate)
 workflow.add_node("general_chat_node", node_general_chat)
+workflow.add_node("cancelled_node", node_cancelled)
 
 workflow.add_node("branch_a_sales", node_branch_a_sales)
 workflow.add_node("branch_b_content", node_branch_b_content)
@@ -247,11 +258,12 @@ workflow.add_edge("supervisor", "hitl_gate")
 workflow.add_conditional_edges(
     "hitl_gate",
     check_supervisor_routing,
-    ["general_chat_node", "branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker", "supervisor"]
+    ["general_chat_node", "cancelled_node", "branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker", "supervisor"]
 )
 
 # Route general chat directly to end
 workflow.add_edge("general_chat_node", END)
+workflow.add_edge("cancelled_node", END)
 
 # Branch in
 workflow.add_edge("branch_a_sales", "aggregator")
