@@ -94,10 +94,12 @@ async def plan_skills(query: str) -> Dict[str, Any]:
     )
     try:
         raw = await router.generate_tier1(prompt)
-        selected = _parse_plan(raw)
-        if not selected:
-            selected = fallback
-        return {"selected_skills": selected, "reasoning": "LLM plan validated against registry."}
+        model_selected = _parse_plan(raw)
+        # Merge model choices with high-confidence deterministic intents so an
+        # incomplete LLM plan cannot drop a clearly requested workstream.
+        selected = list(dict.fromkeys(fallback + model_selected))
+        selected = [skill for wave in _ready_waves(selected) for skill in wave]
+        return {"selected_skills": selected, "reasoning": "LLM plan validated and merged with deterministic intent signals."}
     except Exception:
         return {"selected_skills": fallback, "reasoning": "Deterministic intent plan used because the planning model was unavailable."}
 
