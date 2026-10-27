@@ -24,7 +24,10 @@ async def node_supervisor(state: BlackboardState) -> Dict:
 
     # 1. Select exact skill workers, then map their departments for reporting/compatibility.
     next_nodes = await analyze_task_and_route(state.raw_thought)
-    skill_plan = await plan_skills(state.raw_thought)
+    if "general_chat" in next_nodes:
+        skill_plan = {"selected_skills": [], "reasoning": "General conversation; no specialist worker required."}
+    else:
+        skill_plan = await plan_skills(state.raw_thought)
     selected_skills = skill_plan["selected_skills"]
     if "general_chat" not in next_nodes:
         selected_departments = list(dict.fromkeys(SKILL_REGISTRY[s]["department"] for s in selected_skills))
@@ -255,13 +258,13 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
             else:
                 report_sections.append(f"**{skill_id}**\n{result.get('output', '')}")
 
-    if "branch_a_sales" in state.next_nodes:
+    if "branch_a_sales" in state.next_nodes and (state.b2b_emails or state.leads_csv):
         humanized_b2b = [clean_and_humanize(email) for email in state.b2b_emails if email]
         report_sections.append("### 🎯 Sales & Leads")
         report_sections.append(f"**Leads:**\n```csv\n{state.leads_csv}\n```")
         report_sections.append(f"**Outreach:**\n" + "\n\n---\n\n".join(humanized_b2b))
 
-    if "branch_b_content" in state.next_nodes:
+    if "branch_b_content" in state.next_nodes and (state.yt_scripts or state.ig_reels or state.x_threads):
         humanized_yt = [clean_and_humanize(script) for script in state.yt_scripts if script]
         humanized_ig = [clean_and_humanize(reel) for reel in state.ig_reels if reel]
         humanized_x = [clean_and_humanize(thread) for thread in state.x_threads if thread]
@@ -271,12 +274,12 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
         if humanized_ig: report_sections.append(f"**Instagram:**\n" + "\n\n".join(humanized_ig))
         if humanized_x: report_sections.append(f"**X/Twitter:**\n" + "\n\n".join(humanized_x))
 
-    if "branch_c_tech" in state.next_nodes:
+    if "branch_c_tech" in state.next_nodes and state.replica_codebase:
         report_sections.append("\n### 💻 Tech & MVP")
         for filename, code in state.replica_codebase.items():
             report_sections.append(f"**{filename}:**\n```html\n{code}\n```")
 
-    if "branch_d_coworker" in state.next_nodes:
+    if "branch_d_coworker" in state.next_nodes and state.opendots_log:
         report_sections.append("\n### 🤖 OpenDots Coworker Log")
         report_sections.append(state.opendots_log)
 
