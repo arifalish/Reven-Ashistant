@@ -1,63 +1,59 @@
 import asyncio
+import os
 import aiohttp
-from typing import List, Dict
+
 
 class MapsScraperWorker:
-    def __init__(self, endpoint_url: str = "http://localhost:8080/api/v1/jobs"):
-        self.endpoint_url = endpoint_url
-        self.proxies = [
-            "http://proxy1:port",
-            "http://proxy2:port"
-        ]
+    """Adapter for a separately deployed gosom/google-maps-scraper service."""
+
+    def __init__(self, endpoint_url: str | None = None):
+        self.endpoint_url = (endpoint_url or os.getenv("GOOGLE_MAPS_SCRAPER_URL", "")).rstrip("/")
 
     async def scrape_leads(self, city: str, niche: str) -> str:
-        """
-        Creates a job on the gosom/google-maps-scraper Docker engine.
-        Returns CSV data.
-        """
+        """Submit a real scraper job and return its CSV, or an explicit integration error."""
+        if not self.endpoint_url:
+            return "ERROR: GOOGLE_MAPS_SCRAPER_URL is not configured; no leads were scraped."
+
         payload = {
             "queries": [f"{niche} in {city}"],
             "depth": 5,
             "email": True,
             "max_time": 300,
-            "proxies": self.proxies
         }
-
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=330)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             try:
-                # Trigger the scrape job
                 async with session.post(self.endpoint_url, json=payload) as response:
-                    if response.status != 200:
-                        print(f"Scraper engine failed with status: {response.status}")
-                        return self._get_fallback_csv(city, niche)
-
+                    if response.status not in (200, 201, 202):
+                        body = (await response.text())[:500]
+                        return f"ERROR: scraper service returned HTTP {response.status}: {body}"
                     data = await response.json()
-                    job_id = data.get("job_id")
-
+                    job_id = data.get("job_id") or data.get("id")
                     if not job_id:
-                        return self._get_fallback_csv(city, niche)
+                        # Some compatible services return CSV synchronously.
+                        if "csv" in data and isinstance(data["csv"], str):
+                            return data["csv"]
+                        return "ERROR: scraper service did not return a job_id or CSV result."
 
-                    # Poll for completion
-                    for _ in range(60): # Max wait ~5 minutes
-                        await asyncio.sleep(5)
-                        async with session.get(f"{self.endpoint_url}/{job_id}") as status_response:
-                            if status_response.status == 200:
-                                status_data = await status_response.json()
-                                if status_data.get("status") == "completed":
-                                    # Fetch results (assuming CSV format is available or needs converting)
-                                    # Depending on gosom scraper version, results endpoint might differ
-                                    async with session.get(f"{self.endpoint_url}/{job_id}/results?format=csv") as result_response:
-                                        if result_response.status == 200:
-                                            return await result_response.text()
+                for _ in range(60):
+                    await asyncio.sleep(5)
+                    async with session.get(f"{self.endpoint_url}/{job_id}") as status_response:
+                        if status_response.status != 200:
+                            continue
+                        status_data = await status_response.json()
+                        status = str(status_data.get("status", "")).lower()
+                        if status in {"failed", "error", "cancelled"}:
+                            return f"ERROR: scraper job {job_id} ended with status {status}."
+                        if status in {"completed", "complete", "success", "succeeded"}:
+                            async with session.get(f"{self.endpoint_url}/{job_id}/results?format=csv") as result_response:
+                                if result_response.status == 200:
+                                    return await result_response.text()
+                                if isinstance(status_data.get("csv"), str):
+                                    return status_data["csv"]
+                                return f"ERROR: scraper job completed but result download returned HTTP {result_response.status}."
+                return f"ERROR: scraper job {job_id} did not finish within the polling window."
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+                return f"ERROR: could not reach scraper service: {exc}"
 
-            except Exception as e:
-                print(f"Error during map scraping: {e}")
-
-        return self._get_fallback_csv(city, niche)
-
-    def _get_fallback_csv(self, city: str, niche: str) -> str:
-        mock_csv = "name,address,phone,website,rating,reviews,lat,lng,emails\\n"
-        mock_csv += f"Mock {niche} Business,123 {city} St,555-0100,example.com,4.8,100,40.7128,-74.0060,contact@example.com\\n"
-        return mock_csv
 
 scraper_worker = MapsScraperWorker()
