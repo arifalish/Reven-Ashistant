@@ -2,15 +2,25 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies if required
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    wget \
+    curl \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN playwright install --with-deps chromium
 
-# Copy application files
 COPY app/ app/
 COPY core/ core/
 COPY interfaces/ interfaces/
@@ -19,7 +29,6 @@ COPY workers/ workers/
 COPY scripts/ scripts/
 COPY skills/ skills/
 
-# Run the bootstrap script for skills
 RUN chmod +x scripts/bootstrap_skills.sh && ./scripts/bootstrap_skills.sh
 
 EXPOSE 8000
