@@ -47,38 +47,21 @@ def run_browser_task(task: str, context: Optional[Dict[str, Any]] = None, headle
             browser=browser
         )
 
-        # We need an event loop to run the async agent.run() method from this sync tool
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If we're already inside a running loop, we shouldn't block.
-            # But LangGraph usually runs tools synchronously unless wrapped in async.
-            # Ideally this tool should be async, but for tool node compatibility we'll use a new loop if needed.
-            # We'll use a standard approach for sync execution of async functions in tools.
-            pass
-
+        # The supervisor invokes this synchronous tool from a worker thread.
+        # Use a fresh loop there and always attempt to close the browser session.
         async def _run():
             result = await agent.run()
-            # result is an AgentHistoryList
             return str(result)
 
         try:
-            # Try getting current loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import nest_asyncio
-                nest_asyncio.apply()
-            result_str = loop.run_until_complete(_run())
-        except RuntimeError:
             result_str = asyncio.run(_run())
-
-        # Clean up browser
-        async def _close():
-            await browser.close()
-
-        try:
-            asyncio.run(_close())
-        except Exception as e:
-             logger.warning(f"Error closing browser: {e}")
+        finally:
+            async def _close():
+                await browser.close()
+            try:
+                asyncio.run(_close())
+            except Exception as close_error:
+                logger.warning("Error closing browser: %s", close_error)
 
         return result_str
 
