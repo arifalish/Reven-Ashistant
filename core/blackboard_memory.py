@@ -6,6 +6,7 @@ from firebase_admin import credentials, firestore
 from redis.asyncio import Redis
 from core.config import settings
 
+
 class BlackboardState(BaseModel):
     """
     Shared Persistent Memory Schema for LangGraph.
@@ -28,6 +29,7 @@ class BlackboardState(BaseModel):
 
     replica_codebase: Dict[str, str] = Field(default_factory=dict)
     opendots_log: str = Field(default="")
+    conversation_memory: Dict[str, Any] = Field(default_factory=dict)
 
     retries: int = Field(default=0)
 
@@ -40,7 +42,6 @@ class BlackboardState(BaseModel):
     next_nodes: List[str] = Field(default_factory=list)
     general_response: str = Field(default="")
     final_report: str = Field(default="")
-
 
 
 class BlackboardMemoryManager:
@@ -73,10 +74,15 @@ class BlackboardMemoryManager:
         state_dict = state.model_dump()
         state_json = json.dumps(state_dict)
 
+        if state.chat_id:
+            self._local_storage[f"chat:{state.chat_id}"] = state_json
+
         # Try Redis
         if self.redis:
             try:
                 await self.redis.set(f"mission:{state.mission_id}", state_json)
+                if state.chat_id:
+                    await self.redis.set(f"chat:{state.chat_id}:latest", state_json)
             except Exception:
                 pass
 
@@ -84,6 +90,13 @@ class BlackboardMemoryManager:
         if self.db:
             try:
                 self.db.collection('missions').document(state.mission_id).set(state_dict)
+                if state.chat_id:
+                    self.db.collection('chat_memory').document(str(state.chat_id)).set({
+                        "chat_id": state.chat_id,
+                        "mission_id": state.mission_id,
+                        "state": state_dict,
+                        "updated_at": __import__("datetime").datetime.utcnow().isoformat()
+                    })
             except Exception:
                 pass
 
@@ -116,6 +129,31 @@ class BlackboardMemoryManager:
 
         return BlackboardState(mission_id=mission_id)
 
+    async def load_latest_chat_state(self, chat_id: int) -> Optional[BlackboardState]:
+        """Load the latest known state for a Telegram chat thread."""
+        if self.redis:
+            try:
+                data = await self.redis.get(f"chat:{chat_id}:latest")
+                if data:
+                    return BlackboardState.model_validate_json(data)
+            except Exception:
+                pass
+
+        if self.db:
+            try:
+                doc = self.db.collection('chat_memory').document(str(chat_id)).get()
+                if doc.exists:
+                    state_dict = doc.to_dict().get('state')
+                    if state_dict:
+                        return BlackboardState.model_validate(state_dict)
+            except Exception:
+                pass
+
+        if f"chat:{chat_id}" in self._local_storage:
+            return BlackboardState.model_validate_json(self._local_storage[f"chat:{chat_id}"])
+
+        return None
+
     async def add_to_vector_rag(self, content: str, metadata: dict):
         """
         Store context in Vector DB (simulated with Redis / mock logic).
@@ -126,8 +164,9 @@ class BlackboardMemoryManager:
                 # Mocking a vector insertion by just caching raw text
                 # Real implementation would call embedding model, then store vector
                 key = f"rag:{metadata.get('type', 'doc')}:{hash(content)}"
-                await self.redis.set(key, content, ex=86400) # 24h expiry
+                await self.redis.set(key, content, ex=86400)  # 24h expiry
             except Exception:
                 pass
+
 
 memory_manager = BlackboardMemoryManager()
