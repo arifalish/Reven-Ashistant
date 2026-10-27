@@ -114,7 +114,12 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
 
     # Dynamic LLM routing to the browser tool if requested by the user
     # Binds the LangChain tool and parses it into a ToolNode equivalent output
-    if "post to twitter" in state.raw_thought.lower():
+    if "post to twitter" in state.raw_thought.lower() or "open browser" in state.raw_thought.lower():
+        browser_plan = await skill_registry.execute_skill(
+            "browser-agent-skill",
+            "Create a safe browser execution checklist for the requested action. Do not claim the action was performed.",
+            {"raw_request": state.raw_thought, "draft_content": results[2]},
+        )
         tool_node = ToolNode([run_browser_task])
         # We manually invoke the node here inside the branch for demonstration.
         # In a real expanded graph, this would be its own standalone node edge.
@@ -129,7 +134,7 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
         )
         browser_res = await tool_node.ainvoke({"messages": [msg]})
         log_output = browser_res["messages"][-1].content
-        results[2] += f"\n\n[Browser execution log: {log_output}]"
+        results[2] += f"\n\n[Browser plan: {browser_plan}]\n[Browser execution log: {log_output}]"
 
     return {
         "yt_scripts": [results[0]],
@@ -151,10 +156,16 @@ async def node_branch_d_coworker(state: BlackboardState) -> Dict:
     """Execute founder/master planning skills and OpenDots coworker."""
     strategy = state.founder_strategy.get("summary", "")
     context = {"strategy": strategy, "raw_request": state.raw_thought}
-    founder, master = await asyncio.gather(
+    skill_calls = [
         skill_registry.execute_skill("founder-skill", "Create an actionable plan for this request.", context),
         skill_registry.execute_skill("master-skills", "Coordinate relevant workstreams and list next steps.", context),
-    )
+        skill_registry.execute_skill("arena-skill", "Review the proposed plan for gaps, risks and measurable success criteria.", context),
+        skill_registry.execute_skill("opendots-coworker-skill", "Produce an operational coworker checklist with clear next actions.", context),
+    ]
+    if re.search(r"\\b(invest|trading|portfolio|stock|market analysis|financial model)\\b", state.raw_thought, re.I):
+        skill_calls.append(skill_registry.execute_skill("trader-skill", "Analyze the financial/trading aspect and clearly state assumptions and risks.", context))
+    skill_results = await asyncio.gather(*skill_calls)
+    founder, master, arena_review, opendots_plan = skill_results[:4]
     coworker_task = f"Analyze the request and suggest operational next steps: {strategy}"
     tool_node = ToolNode([run_opendots_worker])
     from langchain_core.messages import AIMessage
@@ -165,7 +176,7 @@ async def node_branch_d_coworker(state: BlackboardState) -> Dict:
     }])
     res = await tool_node.ainvoke({"messages": [msg]})
     log_output = res["messages"][-1].content
-    return {"opendots_log": f"{founder}\n\n{master}\n\n{log_output}"}
+    return {"opendots_log": f"{founder}\n\n{master}\n\n{arena_review}\n\n{opendots_plan}\n\n{log_output}"}
 
 async def node_aggregator(state: BlackboardState) -> Dict:
     """Wait for all parallel branches to finish and aggregate results."""
