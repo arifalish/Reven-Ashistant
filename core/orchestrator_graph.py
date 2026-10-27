@@ -9,48 +9,67 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from core.blackboard_memory import BlackboardState, memory_manager
 from core.llm_router import router
+from skills.opendots_agent import run_opendots_worker
 from core.skill_loader import skill_registry
 from core.credential_vault import credential_vault
 from workers.maps_scraper_worker import scraper_worker
 from middleware.quality_humanizer import clean_and_humanize
-from delivery.telegram_ux import create_workspace_zip
 from skills.browser_agent import run_browser_task
 
-async def node_ingestion(state: BlackboardState) -> Dict:
-    """Phase 1: Ingestion & Strategy Blueprint"""
-    strategy_prompt = f"Analyze business thought: {state.raw_thought}. Provide unit economics, product strategy, and SEO blueprint."
-    strategy_result = await router.generate_tier1(strategy_prompt)
+from core.supervisor_router import analyze_task_and_route
 
-    # Store to RAG
-    await memory_manager.add_to_vector_rag(strategy_result, {"type": "strategy", "mission": state.mission_id})
+async def node_supervisor(state: BlackboardState) -> Dict:
+    """Phase 1: Dynamic Supervisor & Routing"""
 
-    return {"founder_strategy": {"summary": strategy_result}}
+    # 1. Decide routing
+    next_nodes = await analyze_task_and_route(state.raw_thought)
 
-def node_hitl_gate(state: BlackboardState) -> Dict:
-    """Phase 2: Human-in-the-Loop Telegram Approval Gate"""
-    # structured resume payload: {"action": "approve" | "edit" | "cancel", "modifications": "..."}
-    user_approval = interrupt("Please approve the strategy via Telegram callback.")
+    # 2. If it's just a general chat, generate response immediately
+    general_response = ""
+    if "general_chat" in next_nodes:
+        prompt = f"Answer the following query clearly and concisely:\n{state.raw_thought}"
+        general_response = await router.generate_tier1(prompt)
+    else:
+        # Otherwise generate a master strategy to feed the agents
+        strategy_prompt = f"Analyze business thought: {state.raw_thought}. Provide a brief master strategy for the agents."
+        strategy = await router.generate_tier1(strategy_prompt)
+        state.founder_strategy = {"summary": strategy}
 
-    if not isinstance(user_approval, dict):
-        if user_approval == "cancel":
-            raise Exception("Mission Cancelled by User")
+    return {
+        "next_nodes": next_nodes,
+        "general_response": general_response,
+        "founder_strategy": state.founder_strategy
+    }
+
+async def node_hitl_gate(state: BlackboardState) -> Dict:
+    """Phase 2: Human-in-the-Loop Gateway"""
+    if "general_chat" in state.next_nodes:
+        # No approval needed for general chat
         return {}
 
-    action = user_approval.get("action")
-    if action == "cancel":
-        raise Exception("Mission Cancelled by User")
-    elif action == "edit":
-        modifications = user_approval.get("modifications", "")
-        return {"raw_thought": f"{state.raw_thought} (Edit: {modifications})"}
+    # Check if user has already provided approval/edits
+    if "(Edit:" in state.raw_thought:
+        return {}
 
+    # Pause execution for approval
+    _ = interrupt("Please approve the strategy via Telegram callback.")
     return {}
 
-def check_hitl_routing(state: BlackboardState):
-    """If edited, loop back to ingestion. Otherwise, proceed to branches."""
-    if "(Edit:" in state.raw_thought:
-        return "ingestion"
-    return "branch_a_sales"
+def check_supervisor_routing(state: BlackboardState):
+    """Route to appropriate nodes based on supervisor decision."""
+    if "general_chat" in state.next_nodes:
+        return ["general_chat_node"]
 
+    if "(Edit:" in state.raw_thought:
+        return ["supervisor"]
+
+    # Launch approved branches in parallel
+    valid_branches = [n for n in state.next_nodes if n != "general_chat"]
+    return valid_branches
+
+async def node_general_chat(state: BlackboardState) -> Dict:
+    """Handles general conversational queries."""
+    return {"final_report": state.general_response}
 async def node_branch_a_sales(state: BlackboardState) -> Dict:
     """Phase 3 - Branch A: B2B Lead Engine & Sales"""
     leads = await scraper_worker.scrape_leads("Target City", "Niche")
@@ -116,6 +135,29 @@ async def node_branch_c_tech(state: BlackboardState) -> Dict:
     # Must return vault_data so the checkpointer persists any newly added credentials
     return {"replica_codebase": {"index.html": code}, "vault_data": state.vault_data}
 
+async def node_branch_d_coworker(state: BlackboardState) -> Dict:
+    """Phase 3 - Branch D: OpenDots Coworker"""
+
+    # We dynamically parse the task for the coworker from the user's thought, or provide a generic one.
+    coworker_task = f"Analyze the following strategy and suggest operational next steps: {state.founder_strategy.get('summary', '')}"
+
+    # Create ToolNode and invoke
+    tool_node = ToolNode([run_opendots_worker])
+    from langchain_core.messages import AIMessage
+    msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "run_opendots_worker",
+            "args": {"task": coworker_task, "context": {"raw_thought": state.raw_thought}},
+            "id": "call_opendots_123"
+        }]
+    )
+
+    res = await tool_node.ainvoke({"messages": [msg]})
+    log_output = res["messages"][-1].content
+
+    return {"opendots_log": log_output}
+
 async def node_aggregator(state: BlackboardState) -> Dict:
     """Wait for all parallel branches to finish and aggregate results."""
     return {}
@@ -146,66 +188,77 @@ def check_correction(state: BlackboardState):
     return "linter_humanizer"
 
 async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
-    """Phase 4b: Mandatory Humanizer Gate"""
+    """Phase 4b: Mandatory Humanizer Gate and Final Report Compiler"""
 
-    humanized_yt = [clean_and_humanize(script) for script in state.yt_scripts if script]
-    humanized_ig = [clean_and_humanize(reel) for reel in state.ig_reels if reel]
-    humanized_b2b = [clean_and_humanize(email) for email in state.b2b_emails if email]
-    humanized_x = [clean_and_humanize(thread) for thread in state.x_threads if thread]
+    report_sections = []
+    report_sections.append(f"### 🧠 Master Strategy\n{state.founder_strategy.get('summary', '')}\n")
 
-    final_artifacts = {
-        "01_Founder_Strategy_and_Unit_Economics.md": str(state.founder_strategy),
-        "02_Verified_Google_Maps_Leads.csv": state.leads_csv,
-        "03_B2B_Sales_Desk_Cold_Emails_and_LinkedIn_DMs.md": "\\n\\n---\\n\\n".join(humanized_b2b),
-        "04_YouTube_Scripts_and_Scored_Hooks.md": "\\n\\n---\\n\\n".join(humanized_yt),
-        "05_Instagram_Reels_and_Linted_Captions.md": "\\n\\n---\\n\\n".join(humanized_ig),
-        "06_X_Threads_and_SEO_Blueprint.md": "\\n\\n---\\n\\n".join(humanized_x),
-        "07_Replica_MVP_Codebase": state.replica_codebase
-    }
+    if "branch_a_sales" in state.next_nodes:
+        humanized_b2b = [clean_and_humanize(email) for email in state.b2b_emails if email]
+        report_sections.append("### 🎯 Sales & Leads")
+        report_sections.append(f"**Leads:**\n```csv\n{state.leads_csv}\n```")
+        report_sections.append(f"**Outreach:**\n" + "\n\n---\n\n".join(humanized_b2b))
+
+    if "branch_b_content" in state.next_nodes:
+        humanized_yt = [clean_and_humanize(script) for script in state.yt_scripts if script]
+        humanized_ig = [clean_and_humanize(reel) for reel in state.ig_reels if reel]
+        humanized_x = [clean_and_humanize(thread) for thread in state.x_threads if thread]
+
+        report_sections.append("\n### 📱 Content Swarm")
+        if humanized_yt: report_sections.append(f"**YouTube:**\n" + "\n\n".join(humanized_yt))
+        if humanized_ig: report_sections.append(f"**Instagram:**\n" + "\n\n".join(humanized_ig))
+        if humanized_x: report_sections.append(f"**X/Twitter:**\n" + "\n\n".join(humanized_x))
+
+    if "branch_c_tech" in state.next_nodes:
+        report_sections.append("\n### 💻 Tech & MVP")
+        for filename, code in state.replica_codebase.items():
+            report_sections.append(f"**{filename}:**\n```html\n{code}\n```")
+
+    if "branch_d_coworker" in state.next_nodes:
+        report_sections.append("\n### 🤖 OpenDots Coworker Log")
+        report_sections.append(state.opendots_log)
+
+    final_report = "\n".join(report_sections)
 
     return {
-        "yt_scripts": humanized_yt,
-        "ig_reels": humanized_ig,
-        "b2b_emails": humanized_b2b,
-        "x_threads": humanized_x,
-        "final_artifacts": final_artifacts
+        "final_report": final_report
     }
+
 
 # Build LangGraph
 workflow = StateGraph(BlackboardState)
 
-workflow.add_node("ingestion", node_ingestion)
+workflow.add_node("supervisor", node_supervisor)
 workflow.add_node("hitl_gate", node_hitl_gate)
+workflow.add_node("general_chat_node", node_general_chat)
+
 workflow.add_node("branch_a_sales", node_branch_a_sales)
 workflow.add_node("branch_b_content", node_branch_b_content)
 workflow.add_node("branch_c_tech", node_branch_c_tech)
+workflow.add_node("branch_d_coworker", node_branch_d_coworker)
+
 workflow.add_node("aggregator", node_aggregator)
 workflow.add_node("self_correction", node_self_correction)
 workflow.add_node("linter_humanizer", node_linter_and_humanizer)
 
 # Define edges
-workflow.set_entry_point("ingestion")
-workflow.add_edge("ingestion", "hitl_gate")
+workflow.set_entry_point("supervisor")
+workflow.add_edge("supervisor", "hitl_gate")
 
-# Conditional Edge for HITL Gate
-# In langgraph <0.3 parallel conditional edges require a slightly different approach
-# or just unconditional edges if they always run on approval.
 workflow.add_conditional_edges(
     "hitl_gate",
-    check_hitl_routing,
-    {
-        "ingestion": "ingestion",
-        "branch_a_sales": "branch_a_sales",
-    }
+    check_supervisor_routing,
+    ["general_chat_node", "branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker", "supervisor"]
 )
-# The other parallel branches
-workflow.add_edge("hitl_gate", "branch_b_content")
-workflow.add_edge("hitl_gate", "branch_c_tech")
+
+# Route general chat directly to end
+workflow.add_edge("general_chat_node", END)
 
 # Branch in
 workflow.add_edge("branch_a_sales", "aggregator")
 workflow.add_edge("branch_b_content", "aggregator")
 workflow.add_edge("branch_c_tech", "aggregator")
+workflow.add_edge("branch_d_coworker", "aggregator")
 
 workflow.add_edge("aggregator", "self_correction")
 
@@ -218,6 +271,7 @@ workflow.add_conditional_edges(
 )
 
 workflow.add_edge("linter_humanizer", END)
+
 
 async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> Any:
     """Executes the ingestion phase of the LangGraph pipeline up to HITL pause."""
@@ -236,9 +290,10 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> A
         await saver.setup()
         app_graph = workflow.compile(checkpointer=saver)
 
+        final_state_dict = None
         # We process stream to catch any interrupt payloads
         async for event in app_graph.astream(initial_state, config=config, stream_mode="values"):
-            pass
+            final_state_dict = event
 
         # Check if execution got interrupted
         state_snapshot = await app_graph.aget_state(config)
@@ -249,7 +304,13 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> A
                     # Return the interrupt payload to caller
                     return task.interrupts[0].value
 
-    return b""
+        # If it finished cleanly without interrupt (e.g. general chat)
+        if final_state_dict:
+            state = BlackboardState(**final_state_dict)
+            if state.final_report:
+                return state.final_report
+
+    return ""
 
 async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
     """Resumes the graph after approval/edit."""
@@ -283,9 +344,8 @@ async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
 
         if final_state_dict:
             state = BlackboardState(**final_state_dict)
-            if state.final_artifacts:
+            if state.final_report:
                 await memory_manager.save_state(state)
-                zip_bytes = create_workspace_zip(state.final_artifacts)
-                return zip_bytes
+                return state.final_report
 
-    return b""
+    return ""

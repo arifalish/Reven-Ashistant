@@ -5,11 +5,11 @@ import json
 
 from core.config import settings
 from core.orchestrator_graph import run_orchestrator, resume_orchestrator
-from delivery.telegram_ux import TelegramUX
+from interfaces.telegram_bot import TelegramBot
 
 app = FastAPI(title="Autonomous Multi-Agent OS", version="1.0.0")
 
-telegram_ux = TelegramUX(settings.TELEGRAM_BOT_TOKEN)
+telegram_bot = TelegramBot(settings.TELEGRAM_BOT_TOKEN)
 
 @app.get("/")
 async def root():
@@ -90,12 +90,12 @@ async def process_mission(payload: dict):
         message_id = payload.get("mission_control_message_id")
 
         if not message_id:
-            message_id = await telegram_ux.send_message(
+            message_id = await telegram_bot.send_message(
                 chat_id=chat_id,
                 text="🚀 **Live Mission Control Dashboard**\n\n⏳ Extracting intent and blueprinting strategy..."
             )
         else:
-            await telegram_ux.update_status(
+            await telegram_bot.update_status(
                 chat_id=chat_id,
                 message_id=message_id,
                 status_text="⏳ Extracting intent and blueprinting strategy..."
@@ -107,7 +107,7 @@ async def process_mission(payload: dict):
 
             if isinstance(result_payload, dict) and result_payload.get("type") == "credential_request":
                 # Very rare in Phase 1, but technically possible if ingestion requested a credential.
-                await telegram_ux.update_status(
+                await telegram_bot.update_status(
                     chat_id=chat_id,
                     message_id=message_id,
                     status_text=result_payload.get("message")
@@ -121,7 +121,7 @@ async def process_mission(payload: dict):
                         [{"text": "🛑 Cancel", "callback_data": "cancel"}]
                     ]
                 }
-                await telegram_ux.update_status(
+                await telegram_bot.update_status(
                     chat_id=chat_id,
                     message_id=message_id,
                     status_text="⏳ Strategy Blueprint generated. Waiting for approval (Telegram HITL Gate)...\nReply with inline buttons below.",
@@ -129,7 +129,7 @@ async def process_mission(payload: dict):
                 )
 
         except Exception as e:
-            await telegram_ux.update_status(
+            await telegram_bot.update_status(
                 chat_id=chat_id,
                 message_id=message_id,
                 status_text=f"❌ Error during execution: {str(e)}"
@@ -144,19 +144,19 @@ async def process_mission(payload: dict):
 
         if data.startswith("inject_api_key:"):
             _, service_name, actual_key = data.split(":", 2)
-            await telegram_ux.update_status(chat_id, message_id, f"🔑 API Key received for {service_name}. Resuming agent execution...")
+            await telegram_bot.update_status(chat_id, message_id, f"🔑 API Key received for {service_name}. Resuming agent execution...")
             resume_payload = {"api_key": actual_key}
 
         elif data == "approve_launch":
-            await telegram_ux.update_status(chat_id, message_id, "✅ Launch approved! Starting Massive Parallel Swarm Execution...")
+            await telegram_bot.update_status(chat_id, message_id, "✅ Launch approved! Starting Massive Parallel Swarm Execution...")
             resume_payload = {"action": "approve"}
 
         elif data == "edit":
-            await telegram_ux.update_status(chat_id, message_id, "🔄 Editing Target City/Niche...")
+            await telegram_bot.update_status(chat_id, message_id, "🔄 Editing Target City/Niche...")
             resume_payload = {"action": "edit", "modifications": "Updated Target City to NYC"}
 
         elif data == "cancel":
-            await telegram_ux.update_status(chat_id, message_id, "🛑 Mission Cancelled.")
+            await telegram_bot.update_status(chat_id, message_id, "🛑 Mission Cancelled.")
             resume_payload = {"action": "cancel"}
 
         else:
@@ -166,32 +166,31 @@ async def process_mission(payload: dict):
             # Resume execution of the graph
             result_payload = await resume_orchestrator(chat_id, resume_payload)
 
-            # Since orchestrator can yield zip bytes OR a credential interrupt dict payload:
-            if isinstance(result_payload, bytes) and len(result_payload) > 0 and resume_payload.get("action") == "approve":
-                await telegram_ux.send_document(
+            # Since orchestrator can yield final report string OR a credential interrupt dict payload:
+            if isinstance(result_payload, str) and len(result_payload) > 0 and resume_payload.get("action") == "approve":
+                # Send the final Markdown report directly to chat
+                await telegram_bot.send_message(
                     chat_id=chat_id,
-                    document_bytes=result_payload,
-                    filename="Agent_OS_Workspace.zip",
-                    caption="✅ Mission Accomplished! Here is your structured workspace."
+                    text=result_payload
                 )
 
-                await telegram_ux.update_status(
+                await telegram_bot.update_status(
                     chat_id=chat_id,
                     message_id=message_id,
-                    status_text="✅ Mission Completed Successfully! Zip delivered."
+                    status_text="✅ Mission Completed Successfully! Report delivered."
                 )
             elif isinstance(result_payload, dict) and result_payload.get("type") == "credential_request":
                 # Handle the credential request interrupt sent back up from LangGraph
                 service_name = result_payload.get("service_name")
                 message = result_payload.get("message")
-                await telegram_ux.update_status(
+                await telegram_bot.update_status(
                     chat_id=chat_id,
                     message_id=message_id,
                     status_text=message
                 )
 
         except Exception as e:
-            await telegram_ux.update_status(
+            await telegram_bot.update_status(
                 chat_id=chat_id,
                 message_id=message_id,
                 status_text=f"❌ Status: {str(e)}"

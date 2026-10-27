@@ -27,6 +27,7 @@ class BlackboardState(BaseModel):
     li_posts: List[str] = Field(default_factory=list)
 
     replica_codebase: Dict[str, str] = Field(default_factory=dict)
+    opendots_log: str = Field(default="")
 
     retries: int = Field(default=0)
 
@@ -35,6 +36,11 @@ class BlackboardState(BaseModel):
 
     # Stores the final structured content ready for RAM ZIP Packager
     final_artifacts: Dict[str, Any] = Field(default_factory=dict)
+    # Dynamic Routing & Reporting
+    next_nodes: List[str] = Field(default_factory=list)
+    general_response: str = Field(default="")
+    final_report: str = Field(default="")
+
 
 
 class BlackboardMemoryManager:
