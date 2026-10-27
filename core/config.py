@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     CF_GATEWAY_URL: str = "https://gateway.ai.cloudflare.com/v1/mock-account/mock-gateway"
 
     API_SECRET: str = "mock-secret"
+    TELEGRAM_WEBHOOK_SECRET: Optional[str] = None
 
     VAULT_MASTER_KEY: Optional[str] = None
 
