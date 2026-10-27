@@ -7,7 +7,7 @@ Natural-language multi-agent assistant built with FastAPI, LangGraph and a centr
 1. Push this repository to GitHub and create a new Render Blueprint from the repository. Render will read `render.yaml` and build the included `Dockerfile`.
 2. Set `NVIDIA_API_KEY` to a valid NVIDIA NIM API key. The LLM router uses the NVIDIA OpenAI-compatible endpoint when `CF_GATEWAY_URL` is left at the supplied mock-account URL.
 3. Set `TELEGRAM_BOT_TOKEN` to the bot token from BotFather.
-4. Configure your Telegram webhook to POST Telegram updates to `https://YOUR-RENDER-SERVICE.onrender.com/api/v1/orchestrate`. Protect that endpoint with a webhook secret at the edge/proxy if it is exposed publicly.
+4. Configure your Telegram webhook to POST updates to `https://YOUR-RENDER-SERVICE.onrender.com/api/v1/orchestrate` and set Telegram's `secret_token` to the Render value of `TELEGRAM_WEBHOOK_SECRET`. The app validates the `X-Telegram-Bot-Api-Secret-Token` header when this setting is configured.
 5. Optional persistent services:
    - `UPSTASH_REDIS_URL`: Redis connection URL for mission memory/rate limiting.
    - `FIREBASE_CREDS`: path to a Firebase service-account JSON file available inside the container. Prefer a mounted secret file; do not commit credentials.
