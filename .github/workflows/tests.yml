@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, "feat/**"]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run test suite
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          TELEGRAM_BOT_TOKEN: test-token
+          NVIDIA_API_KEY: test-nvidia
+          CF_GATEWAY_URL: https://gateway.ai.cloudflare.com/v1/mock-account/mock-gateway
+        run: pytest -q
+# Keep this workflow on the latest PR head so supervisor and skill-DAG tests are validated together.
+# Validate the webhook-secret and general-chat handling changes too.

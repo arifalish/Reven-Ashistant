@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: reven-ashistant
+    runtime: docker
+    plan: starter
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
+      - key: API_SECRET
+        generateValue: true
+      - key: CF_GATEWAY_URL
+        value: https://gateway.ai.cloudflare.com/v1/mock-account/mock-gateway
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_MAPS_SCRAPER_URL
+        sync: false
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      - key: FIREBASE_CREDS
+        sync: false

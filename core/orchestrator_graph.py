@@ -17,12 +17,23 @@ from middleware.quality_humanizer import clean_and_humanize
 from skills.browser_agent import run_browser_task
 
 from core.supervisor_router import analyze_task_and_route
+from core.skill_supervisor import plan_skills, execute_skill_plan, SKILL_REGISTRY, DEPARTMENT_NODES
 
 async def node_supervisor(state: BlackboardState) -> Dict:
     """Phase 1: Dynamic Supervisor & Routing"""
 
-    # 1. Decide routing
+    # 1. Select exact skill workers, then map their departments for reporting/compatibility.
     next_nodes = await analyze_task_and_route(state.raw_thought)
+    if "general_chat" in next_nodes:
+        skill_plan = {"selected_skills": [], "reasoning": "General conversation; no specialist worker required."}
+    else:
+        skill_plan = await plan_skills(state.raw_thought)
+    selected_skills = skill_plan["selected_skills"]
+    if "general_chat" not in next_nodes:
+        selected_departments = list(dict.fromkeys(SKILL_REGISTRY[s]["department"] for s in selected_skills))
+        next_nodes = list(dict.fromkeys(
+            [DEPARTMENT_NODES[d] for d in selected_departments if d in DEPARTMENT_NODES]
+        )) or ["branch_d_coworker"]
 
     # 2. If it's just a general chat, generate response immediately
     general_response = ""
@@ -37,6 +48,8 @@ async def node_supervisor(state: BlackboardState) -> Dict:
 
     return {
         "next_nodes": next_nodes,
+        "selected_skills": selected_skills,
+        "skill_plan_reasoning": skill_plan["reasoning"],
         "general_response": general_response,
         "founder_strategy": state.founder_strategy
     }
@@ -51,51 +64,74 @@ async def node_hitl_gate(state: BlackboardState) -> Dict:
     if "(Edit:" in state.raw_thought:
         return {}
 
-    # Pause execution for approval
-    _ = interrupt("Please approve the strategy via Telegram callback.")
+    # Pause execution for explicit approval; preserve cancellation as a graph decision.
+    decision = interrupt("Please approve the strategy via Telegram callback.")
+    if isinstance(decision, dict) and decision.get("action") == "cancel":
+        return {"next_nodes": ["cancelled"]}
+    if isinstance(decision, dict) and decision.get("action") not in (None, "approve", "edit"):
+        return {"next_nodes": ["cancelled"]}
     return {}
 
 def check_supervisor_routing(state: BlackboardState):
     """Route to appropriate nodes based on supervisor decision."""
+    if "cancelled" in state.next_nodes:
+        return ["cancelled_node"]
     if "general_chat" in state.next_nodes:
         return ["general_chat_node"]
 
     if "(Edit:" in state.raw_thought:
         return ["supervisor"]
 
-    # Launch approved branches in parallel
-    valid_branches = [n for n in state.next_nodes if n != "general_chat"]
-    return valid_branches
+    # The central skill swarm executes the validated skill DAG; workers are parallelized by wave.
+    return ["skill_swarm_node"]
 
 async def node_general_chat(state: BlackboardState) -> Dict:
     """Handles general conversational queries."""
     return {"final_report": state.general_response}
+
+async def node_cancelled(state: BlackboardState) -> Dict:
+    """Terminate a mission after an explicit user cancellation."""
+    return {"final_report": "Mission cancelled by user. No agent branches were executed."}
 async def node_branch_a_sales(state: BlackboardState) -> Dict:
-    """Phase 3 - Branch A: B2B Lead Engine & Sales"""
-    leads = await scraper_worker.scrape_leads("Target City", "Niche")
-
-    b2b_prompt = f"Write personalized B2B cold emails and LinkedIn DMs for these leads based on the strategy: {state.founder_strategy.get('summary', '')}\\nLeads: {leads[:1000]}"
-    emails = await router.generate_tier3(b2b_prompt)
-
-    return {"leads_csv": leads, "b2b_emails": [emails]}
+    """Execute sales, lead and LinkedIn skills for a sales task."""
+    strategy = state.founder_strategy.get("summary", "")
+    try:
+        leads = await scraper_worker.scrape_leads("Target City", "Niche")
+    except Exception as exc:
+        leads = f"Lead scraper unavailable: {exc}"
+    context = {"strategy": strategy, "leads": leads[:1000], "raw_request": state.raw_thought}
+    emails, linkedin = await asyncio.gather(
+        skill_registry.execute_skill("sales-desk-skill", "Prepare B2B outreach for the request.", context),
+        skill_registry.execute_skill("linkedin-agent-skill", "Prepare personalized LinkedIn outreach.", context),
+    )
+    return {"leads_csv": leads, "b2b_emails": [emails, linkedin]}
 
 async def node_branch_b_content(state: BlackboardState) -> Dict:
-    """Phase 3 - Branch B: Omnichannel Content Swarm"""
-    strategy = state.founder_strategy.get('summary', '')
-
-    yt_prompt = f"Write a YouTube script and thumbnail ideas based on: {strategy}"
-    ig_prompt = f"Write Instagram Reel hooks and captions based on: {strategy}"
-    x_prompt = f"Write a viral X/Twitter thread based on: {strategy}"
+    """Execute YouTube, Instagram, X and SEO skill handlers in parallel."""
+    strategy = state.founder_strategy.get("summary", "")
+    context = {"strategy": strategy, "raw_request": state.raw_thought}
+    yt_prompt = "Create a YouTube script, title, hook and thumbnail concepts."
+    ig_prompt = "Create Instagram Reels hooks, captions and a call to action."
+    x_prompt = "Create a concise, engaging X/Twitter thread."
+    seo_prompt = "Identify SEO intent and propose optimized content and keywords."
 
     results = await asyncio.gather(
-        router.generate_tier3(yt_prompt),
-        router.generate_tier3(ig_prompt),
-        router.generate_tier3(x_prompt)
+        skill_registry.execute_skill("youtube-agent-skill", yt_prompt, context),
+        skill_registry.execute_skill("instagram-agent-skill", ig_prompt, context),
+        skill_registry.execute_skill("x-agent-skill", x_prompt, context),
+        skill_registry.execute_skill("seo-agent-skill", seo_prompt, context),
     )
+    results = results[:3]
+
 
     # Dynamic LLM routing to the browser tool if requested by the user
     # Binds the LangChain tool and parses it into a ToolNode equivalent output
-    if "post to twitter" in state.raw_thought.lower():
+    if "post to twitter" in state.raw_thought.lower() or "open browser" in state.raw_thought.lower():
+        browser_plan = await skill_registry.execute_skill(
+            "browser-agent-skill",
+            "Create a safe browser execution checklist for the requested action. Do not claim the action was performed.",
+            {"raw_request": state.raw_thought, "draft_content": results[2]},
+        )
         tool_node = ToolNode([run_browser_task])
         # We manually invoke the node here inside the branch for demonstration.
         # In a real expanded graph, this would be its own standalone node edge.
@@ -110,7 +146,7 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
         )
         browser_res = await tool_node.ainvoke({"messages": [msg]})
         log_output = browser_res["messages"][-1].content
-        results[2] += f"\n\n[Browser execution log: {log_output}]"
+        results[2] += f"\n\n[Browser plan: {browser_plan}]\n[Browser execution log: {log_output}]"
 
     return {
         "yt_scripts": [results[0]],
@@ -119,47 +155,60 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
     }
 
 async def node_branch_c_tech(state: BlackboardState) -> Dict:
-    """Phase 3 - Branch C: Tech & MVP Engine"""
-    # Simulate a dynamic requirement for an API key to complete tech branch
-    _ = credential_vault.get_or_request_credential(
-        state,
-        service_name="Vercel",
-        env_var_name="VERCEL_TOKEN",
-        setup_url="https://vercel.com/account/tokens"
+    """Execute the replica/technical skill handler for software requests."""
+    strategy = state.founder_strategy.get("summary", "")
+    code = await skill_registry.execute_skill(
+        "replica-skill",
+        "Design and implement the requested technical solution. Return complete code where appropriate.",
+        {"strategy": strategy, "raw_request": state.raw_thought},
     )
-
-    strategy = state.founder_strategy.get('summary', '')
-    code_prompt = f"Build a single-file HTML/JS/CSS MVP landing page based on this strategy: {strategy}"
-    code = await router.generate_tier2(code_prompt)
-
-    # Must return vault_data so the checkpointer persists any newly added credentials
-    return {"replica_codebase": {"index.html": code}, "vault_data": state.vault_data}
+    return {"replica_codebase": {"implementation.md": code}, "vault_data": state.vault_data}
 
 async def node_branch_d_coworker(state: BlackboardState) -> Dict:
-    """Phase 3 - Branch D: OpenDots Coworker"""
-
-    # We dynamically parse the task for the coworker from the user's thought, or provide a generic one.
-    coworker_task = f"Analyze the following strategy and suggest operational next steps: {state.founder_strategy.get('summary', '')}"
-
-    # Create ToolNode and invoke
+    """Execute founder/master planning skills and OpenDots coworker."""
+    strategy = state.founder_strategy.get("summary", "")
+    context = {"strategy": strategy, "raw_request": state.raw_thought}
+    skill_calls = [
+        skill_registry.execute_skill("founder-skill", "Create an actionable plan for this request.", context),
+        skill_registry.execute_skill("master-skills", "Coordinate relevant workstreams and list next steps.", context),
+        skill_registry.execute_skill("arena-skill", "Review the proposed plan for gaps, risks and measurable success criteria.", context),
+        skill_registry.execute_skill("opendots-coworker-skill", "Produce an operational coworker checklist with clear next actions.", context),
+    ]
+    if re.search(r"\b(invest|trading|portfolio|stock|market analysis|financial model)\b", state.raw_thought, re.I):
+        skill_calls.append(skill_registry.execute_skill("trader-skill", "Analyze the financial/trading aspect and clearly state assumptions and risks.", context))
+    skill_results = await asyncio.gather(*skill_calls)
+    founder, master, arena_review, opendots_plan = skill_results[:4]
+    coworker_task = f"Analyze the request and suggest operational next steps: {strategy}"
     tool_node = ToolNode([run_opendots_worker])
     from langchain_core.messages import AIMessage
-    msg = AIMessage(
-        content="",
-        tool_calls=[{
-            "name": "run_opendots_worker",
-            "args": {"task": coworker_task, "context": {"raw_thought": state.raw_thought}},
-            "id": "call_opendots_123"
-        }]
-    )
-
+    msg = AIMessage(content="", tool_calls=[{
+        "name": "run_opendots_worker",
+        "args": {"task": coworker_task, "context": {"raw_thought": state.raw_thought}},
+        "id": "call_opendots_123"
+    }])
     res = await tool_node.ainvoke({"messages": [msg]})
     log_output = res["messages"][-1].content
+    return {"opendots_log": f"{founder}\n\n{master}\n\n{arena_review}\n\n{opendots_plan}\n\n{log_output}"}
 
-    return {"opendots_log": log_output}
+async def node_skill_swarm(state: BlackboardState) -> Dict:
+    """Run the supervisor-selected skills as parallel DAG waves over a shared blackboard."""
+    artifacts = await execute_skill_plan(
+        state.raw_thought,
+        selected_skills=state.selected_skills,
+        context={
+            "mission_id": state.mission_id,
+            "chat_id": state.chat_id,
+            "strategy": state.founder_strategy.get("summary", ""),
+        },
+    )
+    return {
+        "skill_results": artifacts.get("skills", {}),
+        "final_artifacts": artifacts,
+    }
+
 
 async def node_aggregator(state: BlackboardState) -> Dict:
-    """Wait for all parallel branches to finish and aggregate results."""
+    """Join point for the skill swarm and compatibility branches."""
     return {}
 
 async def node_self_correction(state: BlackboardState) -> Dict:
@@ -192,14 +241,30 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
 
     report_sections = []
     report_sections.append(f"### 🧠 Master Strategy\n{state.founder_strategy.get('summary', '')}\n")
+    if state.selected_skills:
+        report_sections.append(
+            "### 🗂️ Supervisor Execution Plan\n"
+            + ", ".join(state.selected_skills)
+            + f"\n\nReason: {state.skill_plan_reasoning}"
+        )
+    if state.skill_results:
+        report_sections.append("### 🤖 Specialized Skill Results")
+        for skill_id in state.selected_skills:
+            result = state.skill_results.get(skill_id)
+            if not result:
+                continue
+            if result.get("status") == "failed":
+                report_sections.append(f"**{skill_id} — failed**\n{result.get('error', 'Unknown error')}")
+            else:
+                report_sections.append(f"**{skill_id}**\n{result.get('output', '')}")
 
-    if "branch_a_sales" in state.next_nodes:
+    if "branch_a_sales" in state.next_nodes and (state.b2b_emails or state.leads_csv):
         humanized_b2b = [clean_and_humanize(email) for email in state.b2b_emails if email]
         report_sections.append("### 🎯 Sales & Leads")
         report_sections.append(f"**Leads:**\n```csv\n{state.leads_csv}\n```")
         report_sections.append(f"**Outreach:**\n" + "\n\n---\n\n".join(humanized_b2b))
 
-    if "branch_b_content" in state.next_nodes:
+    if "branch_b_content" in state.next_nodes and (state.yt_scripts or state.ig_reels or state.x_threads):
         humanized_yt = [clean_and_humanize(script) for script in state.yt_scripts if script]
         humanized_ig = [clean_and_humanize(reel) for reel in state.ig_reels if reel]
         humanized_x = [clean_and_humanize(thread) for thread in state.x_threads if thread]
@@ -209,16 +274,33 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
         if humanized_ig: report_sections.append(f"**Instagram:**\n" + "\n\n".join(humanized_ig))
         if humanized_x: report_sections.append(f"**X/Twitter:**\n" + "\n\n".join(humanized_x))
 
-    if "branch_c_tech" in state.next_nodes:
+    if "branch_c_tech" in state.next_nodes and state.replica_codebase:
         report_sections.append("\n### 💻 Tech & MVP")
         for filename, code in state.replica_codebase.items():
             report_sections.append(f"**{filename}:**\n```html\n{code}\n```")
 
-    if "branch_d_coworker" in state.next_nodes:
+    if "branch_d_coworker" in state.next_nodes and state.opendots_log:
         report_sections.append("\n### 🤖 OpenDots Coworker Log")
         report_sections.append(state.opendots_log)
 
     final_report = "\n".join(report_sections)
+    try:
+        candidate_report = await skill_registry.execute_skill(
+            "humanizer-core-skill",
+            "Polish this report for clarity and natural wording without changing facts, code, IDs, or data. "
+            "Preserve all section headings and all worker outputs.",
+            {"report": final_report},
+        )
+        # A weak/mock model can return unrelated canned text. Never replace the
+        # synthesized report unless the essential execution-plan structure survives.
+        if candidate_report and (
+            not state.selected_skills
+            or "### 🗂️ Supervisor Execution Plan" in candidate_report
+        ):
+            final_report = candidate_report
+    except Exception:
+        # Preserve the compiled report if the optional humanizer model is unavailable.
+        pass
 
     return {
         "final_report": final_report
@@ -231,6 +313,8 @@ workflow = StateGraph(BlackboardState)
 workflow.add_node("supervisor", node_supervisor)
 workflow.add_node("hitl_gate", node_hitl_gate)
 workflow.add_node("general_chat_node", node_general_chat)
+workflow.add_node("cancelled_node", node_cancelled)
+workflow.add_node("skill_swarm_node", node_skill_swarm)
 
 workflow.add_node("branch_a_sales", node_branch_a_sales)
 workflow.add_node("branch_b_content", node_branch_b_content)
@@ -248,12 +332,15 @@ workflow.add_edge("supervisor", "hitl_gate")
 workflow.add_conditional_edges(
     "hitl_gate",
     check_supervisor_routing,
-    ["general_chat_node", "branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker", "supervisor"]
+    ["general_chat_node", "cancelled_node", "skill_swarm_node", "branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker", "supervisor"]
 )
 
 # Route general chat directly to end
 workflow.add_edge("general_chat_node", END)
+workflow.add_edge("cancelled_node", END)
+workflow.add_edge("skill_swarm_node", "aggregator")
 
+# Legacy department branches remain registered for compatibility with saved checkpoints.
 # Branch in
 workflow.add_edge("branch_a_sales", "aggregator")
 workflow.add_edge("branch_b_content", "aggregator")
