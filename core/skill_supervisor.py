@@ -62,17 +62,9 @@ def deterministic_skill_plan(query: str) -> List[str]:
         selected.extend(["google-maps-scraper-kit", "browser-agent-skill"])
     if "browser-agent-skill" in selected and re.search(r"scrape|google maps|companies in|business leads", text, re.I):
         selected.append("google-maps-scraper-kit")
-    # Preserve registry order and add prerequisites before dependent nodes.
-    wanted = set(selected)
-    changed = True
-    while changed:
-        changed = False
-        for node in tuple(wanted):
-            for prerequisite in DEPENDENCIES.get(node, set()):
-                if prerequisite not in wanted:
-                    wanted.add(prerequisite)
-                    changed = True
-    ordered = [skill_id for skill_id in SKILL_REGISTRY if skill_id in wanted]
+    # Add only task-relevant prerequisites above; do not expand optional finalizers
+    # into every possible upstream skill.
+    ordered = [skill_id for skill_id in SKILL_REGISTRY if skill_id in set(selected)]
     # Return a dependency-safe sequence; each wave may still execute concurrently.
     return [skill_id for wave in _ready_waves(ordered) for skill_id in wave]
 
