@@ -20,9 +20,10 @@ COPY workers/ workers/
 COPY scripts/ scripts/
 COPY skills/ skills/
 
-# Run the bootstrap script for skills
+# Bootstrap the 15 skill instruction packages at image build time.
 RUN chmod +x scripts/bootstrap_skills.sh && ./scripts/bootstrap_skills.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Configure Telegram's webhook from RENDER_EXTERNAL_URL, then start the API.
+CMD ["python", "scripts/start.py"]
