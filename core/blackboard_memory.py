@@ -34,6 +34,11 @@ class BlackboardState(BaseModel):
     # Encrypted Vault Data (Key-Value map of service -> encrypted string)
     vault_data: Dict[str, str] = Field(default_factory=dict)
 
+    # Skill-level plan/results are the shared blackboard used by all workers.
+    selected_skills: List[str] = Field(default_factory=list)
+    skill_plan_reasoning: str = Field(default="")
+    skill_results: Dict[str, Any] = Field(default_factory=dict)
+
     # Stores the final structured content ready for RAM ZIP Packager
     final_artifacts: Dict[str, Any] = Field(default_factory=dict)
     # Dynamic Routing & Reporting
@@ -42,13 +47,12 @@ class BlackboardState(BaseModel):
     final_report: str = Field(default="")
 
 
-
 class BlackboardMemoryManager:
     def __init__(self):
         self.db: Optional[firestore.client] = None
         self.redis: Optional[Redis] = None
 
-        # Initialize Firestore
+        # Initialize Firebase only when credentials are configured.
         if settings.FIREBASE_CREDS:
             try:
                 cred = credentials.Certificate(settings.FIREBASE_CREDS)
@@ -58,41 +62,36 @@ class BlackboardMemoryManager:
             except Exception as e:
                 print(f"Warning: Failed to initialize Firebase: {e}")
 
-        # Initialize Redis
+        # Initialize Redis only when a real URL is configured.
         if settings.UPSTASH_REDIS_URL and "mock-url" not in settings.UPSTASH_REDIS_URL:
             try:
                 self.redis = Redis.from_url(settings.UPSTASH_REDIS_URL)
             except Exception as e:
                 print(f"Warning: Failed to initialize Redis: {e}")
 
-        # Simple local memory for fallback
         self._local_storage: Dict[str, str] = {}
 
     async def save_state(self, state: BlackboardState):
-        """Save to Firestore/Redis/Local"""
+        """Persist state to configured Redis/Firestore and retain local fallback."""
         state_dict = state.model_dump()
-        state_json = json.dumps(state_dict)
+        state_json = json.dumps(state_dict, default=str)
 
-        # Try Redis
         if self.redis:
             try:
                 await self.redis.set(f"mission:{state.mission_id}", state_json)
             except Exception:
                 pass
 
-        # Try Firestore
         if self.db:
             try:
-                self.db.collection('missions').document(state.mission_id).set(state_dict)
+                self.db.collection("missions").document(state.mission_id).set(state_dict)
             except Exception:
                 pass
 
-        # Fallback local storage
         self._local_storage[state.mission_id] = state_json
 
     async def load_state(self, mission_id: str) -> BlackboardState:
-        """Load from Redis/Firestore/Local"""
-        # Try Redis
+        """Load from Redis, Firestore, or this process's local fallback."""
         if self.redis:
             try:
                 data = await self.redis.get(f"mission:{mission_id}")
@@ -101,32 +100,25 @@ class BlackboardMemoryManager:
             except Exception:
                 pass
 
-        # Try Firestore
         if self.db:
             try:
-                doc = self.db.collection('missions').document(mission_id).get()
+                doc = self.db.collection("missions").document(mission_id).get()
                 if doc.exists:
                     return BlackboardState.model_validate(doc.to_dict())
             except Exception:
                 pass
 
-        # Fallback local
         if mission_id in self._local_storage:
             return BlackboardState.model_validate_json(self._local_storage[mission_id])
 
         return BlackboardState(mission_id=mission_id)
 
     async def add_to_vector_rag(self, content: str, metadata: dict):
-        """
-        Store context in Vector DB (simulated with Redis / mock logic).
-        In a full implementation, we'd use nvidia/nv-embedqa-e5-v5 and a Pinecone/Qdrant instance.
-        """
+        """Lightweight cache hook; replace with a vector database for semantic retrieval."""
         if self.redis:
             try:
-                # Mocking a vector insertion by just caching raw text
-                # Real implementation would call embedding model, then store vector
                 key = f"rag:{metadata.get('type', 'doc')}:{hash(content)}"
-                await self.redis.set(key, content, ex=86400) # 24h expiry
+                await self.redis.set(key, content, ex=86400)
             except Exception:
                 pass
 
