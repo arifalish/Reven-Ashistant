@@ -4,30 +4,30 @@ Natural-language multi-agent assistant built with FastAPI, LangGraph and a centr
 
 ## Deploy on Render
 
-1. Push this repository to GitHub and create a new Render Blueprint from the repository. Render will read `render.yaml` and build the included `Dockerfile`.
-2. Set `NVIDIA_API_KEY` to a valid NVIDIA NIM API key. The LLM router uses the NVIDIA OpenAI-compatible endpoint when `CF_GATEWAY_URL` is left at the supplied mock-account URL.
-3. Set `TELEGRAM_BOT_TOKEN` to the bot token from BotFather.
-4. Configure your Telegram webhook to POST updates to `https://YOUR-RENDER-SERVICE.onrender.com/api/v1/orchestrate` and set Telegram's `secret_token` to the Render value of `TELEGRAM_WEBHOOK_SECRET`. The app validates the `X-Telegram-Bot-Api-Secret-Token` header when this setting is configured.
-5. Optional persistent services:
-   - `UPSTASH_REDIS_URL`: Redis connection URL for mission memory/rate limiting.
-   - `FIREBASE_CREDS`: path to a Firebase service-account JSON file available inside the container. Prefer a mounted secret file; do not commit credentials.
-   - `GOOGLE_MAPS_SCRAPER_URL`: URL for a separately deployed compatible Maps-scraper service.
-6. Check `GET /` for the service health response.
+1. Create a Render Blueprint from this repository. Render reads `render.yaml` and builds the Dockerfile.
+2. Set `NVIDIA_API_KEY` to a valid NVIDIA NIM API key and `TELEGRAM_BOT_TOKEN` to the token from BotFather. Do not leave either as a mock/default value.
+3. Deploy. At container startup, `scripts/start.py` uses Render's `RENDER_EXTERNAL_URL` to call Telegram `setWebhook` automatically and supplies `TELEGRAM_WEBHOOK_SECRET` when configured. You do not need to set the webhook manually if Telegram accepts the request.
+4. Open the Render service URL and check `GET /` for the health response. Check Render logs for the line `Telegram webhook configured`. If auto-configuration fails, logs show a warning and the service still starts; configure the webhook manually to `https://YOUR-RENDER-SERVICE.onrender.com/api/v1/orchestrate`.
+5. Optional integrations:
+   - `OPENAI_API_KEY`: browser-use research, where the browser agent is enabled.
+   - `GOOGLE_MAPS_SCRAPER_URL`: separately deployed compatible Maps-scraper endpoint.
+   - `UPSTASH_REDIS_URL`: Redis for shared mission memory/rate limiting where supported.
+   - `FIREBASE_CREDS`: path to a Firebase service-account JSON file mounted inside the container. Never commit credentials.
 
 ## Architecture
 
-- **Ingestion:** FastAPI accepts Telegram updates and enqueues them for background processing.
-- **Supervisor:** `core/skill_supervisor.py` validates the LLM plan against a registry of 15 skill IDs and uses deterministic routing when the model is unavailable.
-- **DAG execution:** independent skills run concurrently in a wave; declared dependencies run in later waves. Each result is written to the shared skill-artifact blackboard.
-- **Approval gate:** the LangGraph flow pauses for approval before work branches execute.
-- **Memory:** LangGraph checkpoints are written to SQLite under `/tmp`; mission memory can use Redis/Firestore when configured.
+- **Ingestion:** FastAPI validates Telegram webhook secrets and enqueues updates for background processing.
+- **Supervisor:** `core/skill_supervisor.py` validates plans against a registry of 15 skill IDs and has deterministic routing fallback.
+- **DAG execution:** independent skills run concurrently; declared dependencies run in later waves, with outputs recorded in the shared skill blackboard.
+- **Approval gate:** work tasks pause for explicit Telegram approval before execution.
+- **Memory:** LangGraph checkpoints are stored in `/tmp`; Redis/Firestore persistence is optional.
 - **Skill definitions:** the Docker build bootstraps specialized `SKILL.md` instructions for all 15 skills.
 
-## Current operational boundaries
+## Operational boundaries
 
-- The async queue is process-local; queued tasks can be lost when the service restarts and are not shared across multiple Render instances. For production multi-instance reliability, replace it with a Redis-backed queue and idempotent job state.
-- LLM-backed skills produce plans, copy, code and analysis. Browser automation, live website research, Google Maps scraping, posting to social networks and long-running OpenDots shell work require the corresponding service/tool and credentials to be configured. The system must label unavailable integrations rather than inventing results.
-- The default skill bootstrap creates instruction packages; it does not clone external skill repositories.
+- The task queue is process-local. Jobs can be lost on restart and are not shared between Render instances. Use a durable Redis-backed queue before scaling to multiple instances.
+- LLM-backed skills can produce plans, copy, code and analysis. Browser automation, live Maps scraping, social posting and persistent OpenDots shell work need their respective real integrations and credentials.
+- The default bootstrap creates skill instruction packages; it does not clone third-party skill repositories.
 - Never commit API keys, Telegram tokens, Firebase service-account JSON, cookies or other credentials.
 
 ## Local checks
