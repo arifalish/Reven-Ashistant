@@ -84,13 +84,9 @@ class LLMRouter:
             await asyncio.sleep(1)
 
         try:
-            if "mock-account" in settings.CF_GATEWAY_URL and "mock" in settings.NVIDIA_API_KEY:
-                if "Analyze the following user task/thought" in prompt:
-                    return '["branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker"]'
-                return "# Strategy & Unit Economics\n\nBased on your thought, here is the robust go-to-market plan.\n\n## Unit Economics\n- **CAC**: $50\n- **LTV**: $1500\n- **Margin**: 85%\n\n## Plan\n1. Scrape leads.\n2. Cold email sequence.\n3. Content engine."
             return await self._call_model(self.primary_client, "meta/llama-3.1-70b-instruct", prompt)
         except Exception as e:
-            if "mock-account" in settings.CF_GATEWAY_URL:
+            if "mock-account" in settings.CF_GATEWAY_URL or "mock" in settings.NVIDIA_API_KEY:
                 if "Analyze the following user task/thought" in prompt:
                     return '["branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker"]'
                 return "# Strategy & Unit Economics\n\nBased on your thought, here is the robust go-to-market plan.\n\n## Unit Economics\n- **CAC**: $50\n- **LTV**: $1500\n- **Margin**: 85%\n\n## Plan\n1. Scrape leads.\n2. Cold email sequence.\n3. Content engine."
@@ -103,11 +99,9 @@ class LLMRouter:
             await asyncio.sleep(1)
 
         try:
-            if "mock-account" in settings.CF_GATEWAY_URL and "mock" in settings.NVIDIA_API_KEY:
-                return "<!DOCTYPE html>\n<html lang='en'>\n<head>\n<title>MVP</title>\n<style>body{font-family:sans-serif;}</style>\n</head>\n<body>\n<h1>Fully Functional MVP</h1>\n<button onclick='alert('Action!')'>Get Started</button>\n</body>\n</html>"
             return await self._call_model(self.primary_client, "qwen/qwen2.5-coder-32b-instruct", prompt)
         except Exception as e:
-            if "mock-account" in settings.CF_GATEWAY_URL:
+            if "mock-account" in settings.CF_GATEWAY_URL or "mock" in settings.NVIDIA_API_KEY:
                 return "<!DOCTYPE html>\n<html lang='en'>\n<head>\n<title>MVP</title>\n<style>body{font-family:sans-serif;}</style>\n</head>\n<body>\n<h1>Fully Functional MVP</h1>\n<button onclick='alert('Action!')'>Get Started</button>\n</body>\n</html>"
             raise e
 
@@ -118,7 +112,9 @@ class LLMRouter:
             await asyncio.sleep(1)
 
         try:
-            if "mock-account" in settings.CF_GATEWAY_URL and "mock" in settings.NVIDIA_API_KEY:
+            return await self._call_model(self.primary_client, "meta/llama-3.1-70b-instruct", prompt)
+        except Exception as e:
+            if "mock-account" in settings.CF_GATEWAY_URL or "mock" in settings.NVIDIA_API_KEY:
                 if "YouTube" in prompt:
                     return "# Hook: Did you know 90% of agencies fail?\n\n**Intro:** Here is how to fix it.\n**Body:** 1. Leads. 2. Systems. 3. Sales.\n**Outro:** Subscribe."
 
@@ -133,10 +129,6 @@ class LLMRouter:
 
 
 
-            return await self._call_model(self.primary_client, "meta/llama-3.1-70b-instruct", prompt)
-        except Exception as e:
-            if "mock-account" in settings.CF_GATEWAY_URL:
-                return "Simulated high-quality tier-3 content based on: " + prompt[:30]
             raise e
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5))

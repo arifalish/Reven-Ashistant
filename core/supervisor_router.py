@@ -1,3 +1,4 @@
+import re
 import json
 from typing import List
 from core.llm_router import router
@@ -30,16 +31,15 @@ Example 3: ["branch_d_coworker", "branch_b_content"]
     try:
         response = await router.generate_tier1(prompt)
 
-        # Clean response in case LLM added markdown block
-        response = response.strip()
-        if response.startswith("```json"):
-            response = response[7:]
-        if response.startswith("```"):
-            response = response[3:]
-        if response.endswith("```"):
-            response = response[:-3]
-
-        nodes = json.loads(response.strip())
+        # Try to find JSON array in the response
+        match = re.search(r'\[.*\]', response, re.DOTALL)
+        if match:
+            try:
+                nodes = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                nodes = ["general_chat"]
+        else:
+            nodes = ["general_chat"]
 
         if not isinstance(nodes, list):
             nodes = ["general_chat"]
