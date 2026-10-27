@@ -9,6 +9,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from core.blackboard_memory import BlackboardState, memory_manager
 from core.llm_router import router
+from skills.opendots_agent import run_opendots_worker
 from core.skill_loader import skill_registry
 from core.credential_vault import credential_vault
 from workers.maps_scraper_worker import scraper_worker
@@ -116,6 +117,29 @@ async def node_branch_c_tech(state: BlackboardState) -> Dict:
     # Must return vault_data so the checkpointer persists any newly added credentials
     return {"replica_codebase": {"index.html": code}, "vault_data": state.vault_data}
 
+async def node_branch_d_coworker(state: BlackboardState) -> Dict:
+    """Phase 3 - Branch D: OpenDots Coworker"""
+
+    # We dynamically parse the task for the coworker from the user's thought, or provide a generic one.
+    coworker_task = f"Analyze the following strategy and suggest operational next steps: {state.founder_strategy.get('summary', '')}"
+
+    # Create ToolNode and invoke
+    tool_node = ToolNode([run_opendots_worker])
+    from langchain_core.messages import AIMessage
+    msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "run_opendots_worker",
+            "args": {"task": coworker_task, "context": {"raw_thought": state.raw_thought}},
+            "id": "call_opendots_123"
+        }]
+    )
+
+    res = await tool_node.ainvoke({"messages": [msg]})
+    log_output = res["messages"][-1].content
+
+    return {"opendots_log": log_output}
+
 async def node_aggregator(state: BlackboardState) -> Dict:
     """Wait for all parallel branches to finish and aggregate results."""
     return {}
@@ -160,7 +184,8 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
         "04_YouTube_Scripts_and_Scored_Hooks.md": "\\n\\n---\\n\\n".join(humanized_yt),
         "05_Instagram_Reels_and_Linted_Captions.md": "\\n\\n---\\n\\n".join(humanized_ig),
         "06_X_Threads_and_SEO_Blueprint.md": "\\n\\n---\\n\\n".join(humanized_x),
-        "07_Replica_MVP_Codebase": state.replica_codebase
+        "07_Replica_MVP_Codebase": state.replica_codebase,
+        "08_OpenDots_Coworker_Log.md": state.opendots_log
     }
 
     return {
@@ -179,6 +204,7 @@ workflow.add_node("hitl_gate", node_hitl_gate)
 workflow.add_node("branch_a_sales", node_branch_a_sales)
 workflow.add_node("branch_b_content", node_branch_b_content)
 workflow.add_node("branch_c_tech", node_branch_c_tech)
+workflow.add_node("branch_d_coworker", node_branch_d_coworker)
 workflow.add_node("aggregator", node_aggregator)
 workflow.add_node("self_correction", node_self_correction)
 workflow.add_node("linter_humanizer", node_linter_and_humanizer)
@@ -201,11 +227,13 @@ workflow.add_conditional_edges(
 # The other parallel branches
 workflow.add_edge("hitl_gate", "branch_b_content")
 workflow.add_edge("hitl_gate", "branch_c_tech")
+workflow.add_edge("hitl_gate", "branch_d_coworker")
 
 # Branch in
 workflow.add_edge("branch_a_sales", "aggregator")
 workflow.add_edge("branch_b_content", "aggregator")
 workflow.add_edge("branch_c_tech", "aggregator")
+workflow.add_edge("branch_d_coworker", "aggregator")
 
 workflow.add_edge("aggregator", "self_correction")
 

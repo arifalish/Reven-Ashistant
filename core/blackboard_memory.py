@@ -27,6 +27,7 @@ class BlackboardState(BaseModel):
     li_posts: List[str] = Field(default_factory=list)
 
     replica_codebase: Dict[str, str] = Field(default_factory=dict)
+    opendots_log: str = Field(default="")
 
     retries: int = Field(default=0)
 
