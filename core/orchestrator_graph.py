@@ -285,11 +285,19 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
 
     final_report = "\n".join(report_sections)
     try:
-        final_report = await skill_registry.execute_skill(
+        candidate_report = await skill_registry.execute_skill(
             "humanizer-core-skill",
-            "Polish this report for clarity and natural wording without changing facts, code, IDs, or data.",
+            "Polish this report for clarity and natural wording without changing facts, code, IDs, or data. "
+            "Preserve all section headings and all worker outputs.",
             {"report": final_report},
         )
+        # A weak/mock model can return unrelated canned text. Never replace the
+        # synthesized report unless the essential execution-plan structure survives.
+        if candidate_report and (
+            not state.selected_skills
+            or "### 🗂️ Supervisor Execution Plan" in candidate_report
+        ):
+            final_report = candidate_report
     except Exception:
         # Preserve the compiled report if the optional humanizer model is unavailable.
         pass
