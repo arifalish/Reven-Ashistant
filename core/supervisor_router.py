@@ -35,7 +35,7 @@ INTENT_PATTERNS = {
     ),
     "branch_d_coworker": re.compile(
         r"\b(plan|strategy|analy[sz]e|research|compare|workflow|automate|"
-        r"project|operations|execute|implement|coordinate|task|business plan)\b", re.I
+        r"project|operations|execute|implement|coordinate|task|business(?: plan| idea)?)\b", re.I
     ),
 }
 
