@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Bootstraps the 13 skill repositories into skills_repos/
+# Bootstraps the 15 skill repositories into skills_repos/
 
 SKILLS_DIR="skills_repos"
 mkdir -p "$SKILLS_DIR"
@@ -25,6 +25,8 @@ REPOS=(
     "sales-desk-skill"
     "humanizer-core-skill"
     "seo-agent-skill"
+    "browser-agent-skill"
+    "opendots-coworker-skill"
 )
 
 for repo in "${REPOS[@]}"; do
