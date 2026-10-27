@@ -44,8 +44,8 @@ async def test_end_to_end_orchestrator():
 
     print(f"[Test] Final Report length: {len(res2)}")
     assert "### 🧠 Master Strategy" in res2
-    assert "### 🎯 Sales & Leads" in res2
-    assert "### 💻 Tech & MVP" in res2
+    assert "### 🗂️ Supervisor Execution Plan" in res2
+    assert "### 🤖 Specialized Skill Results" in res2
 
 
 
