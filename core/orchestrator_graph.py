@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.prebuilt import ToolNode
-from langgraph.types import interrupt
+from langgraph.types import interrupt, Send
 from core.blackboard_memory import BlackboardState, memory_manager
 from core.llm_router import router
 from skills.opendots_agent import run_opendots_worker
@@ -18,19 +18,17 @@ from skills.browser_agent import run_browser_task
 
 from core.supervisor_router import analyze_task_and_route
 
+
 async def node_supervisor(state: BlackboardState) -> Dict:
     """Phase 1: Dynamic Supervisor & Routing"""
 
-    # 1. Decide routing
     next_nodes = await analyze_task_and_route(state.raw_thought)
 
-    # 2. If it's just a general chat, generate response immediately
     general_response = ""
     if "general_chat" in next_nodes:
         prompt = f"Answer the following query clearly and concisely:\n{state.raw_thought}"
         general_response = await router.generate_tier1(prompt)
     else:
-        # Otherwise generate a master strategy to feed the agents
         strategy_prompt = f"Analyze business thought: {state.raw_thought}. Provide a brief master strategy for the agents."
         strategy = await router.generate_tier1(strategy_prompt)
         state.founder_strategy = {"summary": strategy}
@@ -38,46 +36,83 @@ async def node_supervisor(state: BlackboardState) -> Dict:
     return {
         "next_nodes": next_nodes,
         "general_response": general_response,
-        "founder_strategy": state.founder_strategy
+        "founder_strategy": state.founder_strategy,
+        "conversation_memory": {
+            **state.conversation_memory,
+            "last_user_request": state.raw_thought,
+            "last_strategy_summary": state.founder_strategy.get("summary", "")
+        }
     }
+
 
 async def node_hitl_gate(state: BlackboardState) -> Dict:
     """Phase 2: Human-in-the-Loop Gateway"""
     if "general_chat" in state.next_nodes:
-        # No approval needed for general chat
         return {}
 
-    # Check if user has already provided approval/edits
     if "(Edit:" in state.raw_thought:
         return {}
 
-    # Pause execution for approval
     _ = interrupt("Please approve the strategy via Telegram callback.")
     return {}
+
+
+def build_branch_payload(state: BlackboardState) -> Dict[str, Any]:
+    return {
+        "raw_thought": state.raw_thought,
+        "founder_strategy": state.founder_strategy,
+        "chat_id": state.chat_id,
+        "mission_id": state.mission_id,
+        "conversation_memory": state.conversation_memory,
+    }
+
 
 def check_supervisor_routing(state: BlackboardState):
     """Route to appropriate nodes based on supervisor decision."""
     if "general_chat" in state.next_nodes:
-        return ["general_chat_node"]
+        return Send("general_chat_node", {"raw_thought": state.raw_thought, "general_response": state.general_response})
 
     if "(Edit:" in state.raw_thought:
-        return ["supervisor"]
+        return "supervisor"
 
-    # Launch approved branches in parallel
     valid_branches = [n for n in state.next_nodes if n != "general_chat"]
-    return valid_branches
+    branch_sends = []
+
+    for node_name in valid_branches:
+        if node_name == "branch_a_sales":
+            branch_sends.append(Send("branch_a_sales", build_branch_payload(state)))
+        elif node_name == "branch_b_content":
+            branch_sends.append(Send("branch_b_content", build_branch_payload(state)))
+        elif node_name == "branch_c_tech":
+            branch_sends.append(Send("branch_c_tech", build_branch_payload(state)))
+        elif node_name == "branch_d_coworker":
+            branch_sends.append(Send("branch_d_coworker", build_branch_payload(state)))
+
+    return branch_sends or [Send("general_chat_node", {"raw_thought": state.raw_thought, "general_response": state.general_response})]
+
 
 async def node_general_chat(state: BlackboardState) -> Dict:
     """Handles general conversational queries."""
     return {"final_report": state.general_response}
+
+
 async def node_branch_a_sales(state: BlackboardState) -> Dict:
     """Phase 3 - Branch A: B2B Lead Engine & Sales"""
     leads = await scraper_worker.scrape_leads("Target City", "Niche")
 
-    b2b_prompt = f"Write personalized B2B cold emails and LinkedIn DMs for these leads based on the strategy: {state.founder_strategy.get('summary', '')}\\nLeads: {leads[:1000]}"
+    b2b_prompt = f"Write personalized B2B cold emails and LinkedIn DMs for these leads based on the strategy: {state.founder_strategy.get('summary', '')}\nLeads: {leads[:1000]}"
     emails = await router.generate_tier3(b2b_prompt)
 
-    return {"leads_csv": leads, "b2b_emails": [emails]}
+    return {
+        "leads_csv": leads,
+        "b2b_emails": [emails],
+        "conversation_memory": {
+            **state.conversation_memory,
+            "sales_summary": emails,
+            "lead_count": len(leads.splitlines()) if leads else 0,
+        },
+    }
+
 
 async def node_branch_b_content(state: BlackboardState) -> Dict:
     """Phase 3 - Branch B: Omnichannel Content Swarm"""
@@ -93,12 +128,8 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
         router.generate_tier3(x_prompt)
     )
 
-    # Dynamic LLM routing to the browser tool if requested by the user
-    # Binds the LangChain tool and parses it into a ToolNode equivalent output
     if "post to twitter" in state.raw_thought.lower():
         tool_node = ToolNode([run_browser_task])
-        # We manually invoke the node here inside the branch for demonstration.
-        # In a real expanded graph, this would be its own standalone node edge.
         from langchain_core.messages import AIMessage
         msg = AIMessage(
             content="",
@@ -112,15 +143,24 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
         log_output = browser_res["messages"][-1].content
         results[2] += f"\n\n[Browser execution log: {log_output}]"
 
-    return {
+    state_payload = {
         "yt_scripts": [results[0]],
         "ig_reels": [results[1]],
-        "x_threads": [results[2]]
+        "x_threads": [results[2]],
+        "conversation_memory": {
+            **state.conversation_memory,
+            "content_summary": {
+                "youtube": results[0],
+                "instagram": results[1],
+                "twitter": results[2],
+            }
+        }
     }
+    return state_payload
+
 
 async def node_branch_c_tech(state: BlackboardState) -> Dict:
     """Phase 3 - Branch C: Tech & MVP Engine"""
-    # Simulate a dynamic requirement for an API key to complete tech branch
     _ = credential_vault.get_or_request_credential(
         state,
         service_name="Vercel",
@@ -132,16 +172,20 @@ async def node_branch_c_tech(state: BlackboardState) -> Dict:
     code_prompt = f"Build a single-file HTML/JS/CSS MVP landing page based on this strategy: {strategy}"
     code = await router.generate_tier2(code_prompt)
 
-    # Must return vault_data so the checkpointer persists any newly added credentials
-    return {"replica_codebase": {"index.html": code}, "vault_data": state.vault_data}
+    return {
+        "replica_codebase": {"index.html": code},
+        "vault_data": state.vault_data,
+        "conversation_memory": {
+            **state.conversation_memory,
+            "tech_summary": {"index.html": code}
+        }
+    }
+
 
 async def node_branch_d_coworker(state: BlackboardState) -> Dict:
     """Phase 3 - Branch D: OpenDots Coworker"""
-
-    # We dynamically parse the task for the coworker from the user's thought, or provide a generic one.
     coworker_task = f"Analyze the following strategy and suggest operational next steps: {state.founder_strategy.get('summary', '')}"
 
-    # Create ToolNode and invoke
     tool_node = ToolNode([run_opendots_worker])
     from langchain_core.messages import AIMessage
     msg = AIMessage(
@@ -156,11 +200,24 @@ async def node_branch_d_coworker(state: BlackboardState) -> Dict:
     res = await tool_node.ainvoke({"messages": [msg]})
     log_output = res["messages"][-1].content
 
-    return {"opendots_log": log_output}
+    return {
+        "opendots_log": log_output,
+        "conversation_memory": {
+            **state.conversation_memory,
+            "coworker_summary": log_output
+        }
+    }
+
 
 async def node_aggregator(state: BlackboardState) -> Dict:
     """Wait for all parallel branches to finish and aggregate results."""
-    return {}
+    return {
+        "conversation_memory": {
+            **state.conversation_memory,
+            "last_aggregated_at": str(uuid.uuid4())
+        }
+    }
+
 
 async def node_self_correction(state: BlackboardState) -> Dict:
     """Phase 4a: Self-Correction Linter Loop"""
@@ -181,11 +238,13 @@ async def node_self_correction(state: BlackboardState) -> Dict:
 
     return {"retries": state.retries}
 
+
 def check_correction(state: BlackboardState):
     """Conditional Edge for self-correction routing"""
     if state.retries < 2 and "(Rewrite" in str(state.yt_scripts):
         return "self_correction"
     return "linter_humanizer"
+
 
 async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
     """Phase 4b: Mandatory Humanizer Gate and Final Report Compiler"""
@@ -221,11 +280,14 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
     final_report = "\n".join(report_sections)
 
     return {
-        "final_report": final_report
+        "final_report": final_report,
+        "conversation_memory": {
+            **state.conversation_memory,
+            "last_final_report": final_report,
+        }
     }
 
 
-# Build LangGraph
 workflow = StateGraph(BlackboardState)
 
 workflow.add_node("supervisor", node_supervisor)
@@ -241,20 +303,15 @@ workflow.add_node("aggregator", node_aggregator)
 workflow.add_node("self_correction", node_self_correction)
 workflow.add_node("linter_humanizer", node_linter_and_humanizer)
 
-# Define edges
 workflow.set_entry_point("supervisor")
 workflow.add_edge("supervisor", "hitl_gate")
 
 workflow.add_conditional_edges(
     "hitl_gate",
     check_supervisor_routing,
-    ["general_chat_node", "branch_a_sales", "branch_b_content", "branch_c_tech", "branch_d_coworker", "supervisor"]
 )
 
-# Route general chat directly to end
-workflow.add_edge("general_chat_node", END)
-
-# Branch in
+workflow.add_edge("general_chat_node", "aggregator")
 workflow.add_edge("branch_a_sales", "aggregator")
 workflow.add_edge("branch_b_content", "aggregator")
 workflow.add_edge("branch_c_tech", "aggregator")
@@ -281,43 +338,37 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int, stat
         mission_id=mission_id,
         chat_id=chat_id,
         message_id=message_id,
-        raw_thought=raw_thought
+        raw_thought=raw_thought,
+        conversation_memory={"thread_id": str(chat_id), "last_message_id": message_id}
     )
 
-    config = {"configurable": {"thread_id": str(chat_id)}}
+    config = {"configurable": {"thread_id": f"chat_{chat_id}"}}
 
     async with AsyncSqliteSaver.from_conn_string("/tmp/langgraph_checkpoints.sqlite") as saver:
         await saver.setup()
         app_graph = workflow.compile(checkpointer=saver)
 
         final_state_dict = None
-        # We process stream to catch any interrupt payloads
         async for event in app_graph.astream(initial_state, config=config, stream_mode="updates"):
-            # event is a dict mapping node_name -> node_output
             for node_name, state_update in event.items():
                 if status_callback:
                     await status_callback(f"Executing step: {node_name}...")
 
-                # We need to manually merge the state update for the final check since we aren't using "values" stream_mode
                 if not final_state_dict:
                     final_state_dict = initial_state.model_dump()
                 if isinstance(state_update, dict):
                     final_state_dict.update(state_update)
 
-
-        # Check if execution got interrupted
         state_snapshot = await app_graph.aget_state(config)
         if state_snapshot.next:
-            # Execution is interrupted. We check tasks.
             for task in state_snapshot.tasks:
                 if task.interrupts:
-                    # Return the interrupt payload to caller
                     return task.interrupts[0].value
 
-        # If it finished cleanly without interrupt (e.g. general chat)
         if final_state_dict:
             state = BlackboardState(**final_state_dict)
             if state.final_report:
+                await memory_manager.save_state(state)
                 return state.final_report
 
     return ""
@@ -325,7 +376,7 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int, stat
 
 async def resume_orchestrator(chat_id: int, resume_payload: dict, status_callback=None) -> Any:
     """Resumes the graph after approval/edit."""
-    config = {"configurable": {"thread_id": str(chat_id)}}
+    config = {"configurable": {"thread_id": f"chat_{chat_id}"}}
 
     try:
         from langgraph.types import Command
@@ -344,8 +395,6 @@ async def resume_orchestrator(chat_id: int, resume_payload: dict, status_callbac
         app_graph = workflow.compile(checkpointer=saver)
 
         final_state_dict = None
-
-        # We need to fetch current state first to merge updates into
         current_state = await app_graph.aget_state(config)
         if current_state.values:
             final_state_dict = current_state.values.copy()
@@ -359,7 +408,6 @@ async def resume_orchestrator(chat_id: int, resume_payload: dict, status_callbac
                     final_state_dict = state_update if isinstance(state_update, dict) else {}
                 elif isinstance(state_update, dict):
                     final_state_dict.update(state_update)
-
 
         state_snapshot = await app_graph.aget_state(config)
         if state_snapshot.next:
