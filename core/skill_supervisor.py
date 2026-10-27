@@ -93,31 +93,20 @@ def _parse_plan(raw: str) -> List[str]:
 async def plan_skills(query: str) -> Dict[str, Any]:
     """LLM-assisted planning with deterministic fallback and strict registry validation."""
     fallback = deterministic_skill_plan(query)
-    descriptions = "\\n".join(f"- {key}: {value['description']}" for key, value in SKILL_REGISTRY.items())
+    descriptions = "\n".join(f"- {key}: {value['description']}" for key, value in SKILL_REGISTRY.items())
     prompt = (
         "You are a supervisor planning a natural-language task for specialized workers. "
         "Select only necessary registered skills, in execution order. Include dependencies when "
         "needed; independent skills may later run in parallel. Never claim tools or data sources exist "
-        "unless configured. Return JSON: {\\"selected_skills\\":[skill IDs],\\"reasoning\\":\\"brief reason\\"}.\\n"
-        f"Registered skills:\\n{descriptions}\\nUser task: {query}"
+        "unless configured. Return JSON: {\"selected_skills\":[skill IDs],\"reasoning\":\"brief reason\"}.\n"
+        f"Registered skills:\n{descriptions}\nUser task: {query}"
     )
     try:
         raw = await router.generate_tier1(prompt)
         selected = _parse_plan(raw)
         if not selected:
             selected = fallback
-        # Ensure dependencies are always present, even if the model omitted them.
-        wanted = set(selected)
-        changed = True
-        while changed:
-            changed = False
-            for node in tuple(wanted):
-                for prerequisite in DEPENDENCIES.get(node, set()):
-                    if prerequisite not in wanted:
-                        wanted.add(prerequisite)
-                        changed = True
-        selected = [key for key in SKILL_REGISTRY if key in wanted]
-        return {"selected_skills": selected, "reasoning": "LLM plan validated against registry; dependency closure applied."}
+        return {"selected_skills": selected, "reasoning": "LLM plan validated against registry."}
     except Exception:
         return {"selected_skills": fallback, "reasoning": "Deterministic intent plan used because the planning model was unavailable."}
 
