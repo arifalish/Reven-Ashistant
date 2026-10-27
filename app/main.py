@@ -182,6 +182,7 @@ async def process_mission(payload: dict):
                 message_id=message_id,
                 status_text=f"❌ Error during execution: {str(e)}"
             )
+            raise
 
     elif "callback_query" in payload:
         # Handle HITL inline button clicks
@@ -250,5 +251,6 @@ async def process_mission(payload: dict):
                 message_id=message_id,
                 status_text=f"❌ Status: {str(e)}"
             )
+            raise
 
     return
