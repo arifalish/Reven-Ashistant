@@ -101,9 +101,17 @@ async def process_mission(payload: dict):
                 status_text="⏳ Extracting intent and blueprinting strategy..."
             )
 
+        async def status_callback(status: str):
+            await telegram_bot.update_status(
+                chat_id=chat_id,
+                message_id=message_id,
+                status_text=f"⏳ {status}"
+            )
+
         try:
             # Run the LangGraph Orchestrator (Phase 1, pauses at Phase 2)
-            result_payload = await run_orchestrator(text, chat_id, message_id)
+            result_payload = await run_orchestrator(text, chat_id, message_id, status_callback)
+
 
             if isinstance(result_payload, dict) and result_payload.get("type") == "credential_request":
                 # Very rare in Phase 1, but technically possible if ingestion requested a credential.
@@ -162,9 +170,16 @@ async def process_mission(payload: dict):
         else:
             return
 
+        async def resume_callback(status: str):
+            await telegram_bot.update_status(
+                chat_id=chat_id,
+                message_id=message_id,
+                status_text=f"⚙️ {status}"
+            )
+
         try:
             # Resume execution of the graph
-            result_payload = await resume_orchestrator(chat_id, resume_payload)
+            result_payload = await resume_orchestrator(chat_id, resume_payload, resume_callback)
 
             # Since orchestrator can yield final report string OR a credential interrupt dict payload:
             if isinstance(result_payload, str) and len(result_payload) > 0 and resume_payload.get("action") == "approve":

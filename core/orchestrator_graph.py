@@ -273,7 +273,7 @@ workflow.add_conditional_edges(
 workflow.add_edge("linter_humanizer", END)
 
 
-async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> Any:
+async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int, status_callback=None) -> Any:
     """Executes the ingestion phase of the LangGraph pipeline up to HITL pause."""
     mission_id = str(uuid.uuid4())
 
@@ -292,8 +292,18 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> A
 
         final_state_dict = None
         # We process stream to catch any interrupt payloads
-        async for event in app_graph.astream(initial_state, config=config, stream_mode="values"):
-            final_state_dict = event
+        async for event in app_graph.astream(initial_state, config=config, stream_mode="updates"):
+            # event is a dict mapping node_name -> node_output
+            for node_name, state_update in event.items():
+                if status_callback:
+                    await status_callback(f"Executing step: {node_name}...")
+
+                # We need to manually merge the state update for the final check since we aren't using "values" stream_mode
+                if not final_state_dict:
+                    final_state_dict = initial_state.model_dump()
+                if isinstance(state_update, dict):
+                    final_state_dict.update(state_update)
+
 
         # Check if execution got interrupted
         state_snapshot = await app_graph.aget_state(config)
@@ -312,7 +322,8 @@ async def run_orchestrator(raw_thought: str, chat_id: int, message_id: int) -> A
 
     return ""
 
-async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
+
+async def resume_orchestrator(chat_id: int, resume_payload: dict, status_callback=None) -> Any:
     """Resumes the graph after approval/edit."""
     config = {"configurable": {"thread_id": str(chat_id)}}
 
@@ -333,8 +344,22 @@ async def resume_orchestrator(chat_id: int, resume_payload: dict) -> Any:
         app_graph = workflow.compile(checkpointer=saver)
 
         final_state_dict = None
-        async for event in app_graph.astream(input_cmd, config=config, stream_mode="values"):
-            final_state_dict = event
+
+        # We need to fetch current state first to merge updates into
+        current_state = await app_graph.aget_state(config)
+        if current_state.values:
+            final_state_dict = current_state.values.copy()
+
+        async for event in app_graph.astream(input_cmd, config=config, stream_mode="updates"):
+            for node_name, state_update in event.items():
+                if status_callback:
+                    await status_callback(f"Executing step: {node_name}...")
+
+                if not final_state_dict:
+                    final_state_dict = state_update if isinstance(state_update, dict) else {}
+                elif isinstance(state_update, dict):
+                    final_state_dict.update(state_update)
+
 
         state_snapshot = await app_graph.aget_state(config)
         if state_snapshot.next:
