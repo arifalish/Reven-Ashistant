@@ -20,7 +20,7 @@ jobs:
           pip install -r requirements.txt
       - name: Run test suite
         env:
-          PYTHONPATH: .
+          PYTHONPATH: ${{ github.workspace }}
           TELEGRAM_BOT_TOKEN: test-token
           NVIDIA_API_KEY: test-nvidia
           CF_GATEWAY_URL: https://gateway.ai.cloudflare.com/v1/mock-account/mock-gateway
