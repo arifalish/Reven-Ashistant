@@ -71,27 +71,36 @@ async def node_general_chat(state: BlackboardState) -> Dict:
     """Handles general conversational queries."""
     return {"final_report": state.general_response}
 async def node_branch_a_sales(state: BlackboardState) -> Dict:
-    """Phase 3 - Branch A: B2B Lead Engine & Sales"""
-    leads = await scraper_worker.scrape_leads("Target City", "Niche")
-
-    b2b_prompt = f"Write personalized B2B cold emails and LinkedIn DMs for these leads based on the strategy: {state.founder_strategy.get('summary', '')}\\nLeads: {leads[:1000]}"
-    emails = await router.generate_tier3(b2b_prompt)
-
-    return {"leads_csv": leads, "b2b_emails": [emails]}
+    """Execute sales, lead and LinkedIn skills for a sales task."""
+    strategy = state.founder_strategy.get("summary", "")
+    try:
+        leads = await scraper_worker.scrape_leads("Target City", "Niche")
+    except Exception as exc:
+        leads = f"Lead scraper unavailable: {exc}"
+    context = {"strategy": strategy, "leads": leads[:1000], "raw_request": state.raw_thought}
+    emails, linkedin = await asyncio.gather(
+        skill_registry.execute_skill("sales-desk-skill", "Prepare B2B outreach for the request.", context),
+        skill_registry.execute_skill("linkedin-agent-skill", "Prepare personalized LinkedIn outreach.", context),
+    )
+    return {"leads_csv": leads, "b2b_emails": [emails, linkedin]}
 
 async def node_branch_b_content(state: BlackboardState) -> Dict:
-    """Phase 3 - Branch B: Omnichannel Content Swarm"""
-    strategy = state.founder_strategy.get('summary', '')
-
-    yt_prompt = f"Write a YouTube script and thumbnail ideas based on: {strategy}"
-    ig_prompt = f"Write Instagram Reel hooks and captions based on: {strategy}"
-    x_prompt = f"Write a viral X/Twitter thread based on: {strategy}"
+    """Execute YouTube, Instagram, X and SEO skill handlers in parallel."""
+    strategy = state.founder_strategy.get("summary", "")
+    context = {"strategy": strategy, "raw_request": state.raw_thought}
+    yt_prompt = "Create a YouTube script, title, hook and thumbnail concepts."
+    ig_prompt = "Create Instagram Reels hooks, captions and a call to action."
+    x_prompt = "Create a concise, engaging X/Twitter thread."
+    seo_prompt = "Identify SEO intent and propose optimized content and keywords."
 
     results = await asyncio.gather(
-        router.generate_tier3(yt_prompt),
-        router.generate_tier3(ig_prompt),
-        router.generate_tier3(x_prompt)
+        skill_registry.execute_skill("youtube-agent-skill", yt_prompt, context),
+        skill_registry.execute_skill("instagram-agent-skill", ig_prompt, context),
+        skill_registry.execute_skill("x-agent-skill", x_prompt, context),
+        skill_registry.execute_skill("seo-agent-skill", seo_prompt, context),
     )
+    results = results[:3]
+
 
     # Dynamic LLM routing to the browser tool if requested by the user
     # Binds the LangChain tool and parses it into a ToolNode equivalent output
@@ -119,44 +128,34 @@ async def node_branch_b_content(state: BlackboardState) -> Dict:
     }
 
 async def node_branch_c_tech(state: BlackboardState) -> Dict:
-    """Phase 3 - Branch C: Tech & MVP Engine"""
-    # Simulate a dynamic requirement for an API key to complete tech branch
-    _ = credential_vault.get_or_request_credential(
-        state,
-        service_name="Vercel",
-        env_var_name="VERCEL_TOKEN",
-        setup_url="https://vercel.com/account/tokens"
+    """Execute the replica/technical skill handler for software requests."""
+    strategy = state.founder_strategy.get("summary", "")
+    code = await skill_registry.execute_skill(
+        "replica-skill",
+        "Design and implement the requested technical solution. Return complete code where appropriate.",
+        {"strategy": strategy, "raw_request": state.raw_thought},
     )
-
-    strategy = state.founder_strategy.get('summary', '')
-    code_prompt = f"Build a single-file HTML/JS/CSS MVP landing page based on this strategy: {strategy}"
-    code = await router.generate_tier2(code_prompt)
-
-    # Must return vault_data so the checkpointer persists any newly added credentials
-    return {"replica_codebase": {"index.html": code}, "vault_data": state.vault_data}
+    return {"replica_codebase": {"implementation.md": code}, "vault_data": state.vault_data}
 
 async def node_branch_d_coworker(state: BlackboardState) -> Dict:
-    """Phase 3 - Branch D: OpenDots Coworker"""
-
-    # We dynamically parse the task for the coworker from the user's thought, or provide a generic one.
-    coworker_task = f"Analyze the following strategy and suggest operational next steps: {state.founder_strategy.get('summary', '')}"
-
-    # Create ToolNode and invoke
+    """Execute founder/master planning skills and OpenDots coworker."""
+    strategy = state.founder_strategy.get("summary", "")
+    context = {"strategy": strategy, "raw_request": state.raw_thought}
+    founder, master = await asyncio.gather(
+        skill_registry.execute_skill("founder-skill", "Create an actionable plan for this request.", context),
+        skill_registry.execute_skill("master-skills", "Coordinate relevant workstreams and list next steps.", context),
+    )
+    coworker_task = f"Analyze the request and suggest operational next steps: {strategy}"
     tool_node = ToolNode([run_opendots_worker])
     from langchain_core.messages import AIMessage
-    msg = AIMessage(
-        content="",
-        tool_calls=[{
-            "name": "run_opendots_worker",
-            "args": {"task": coworker_task, "context": {"raw_thought": state.raw_thought}},
-            "id": "call_opendots_123"
-        }]
-    )
-
+    msg = AIMessage(content="", tool_calls=[{
+        "name": "run_opendots_worker",
+        "args": {"task": coworker_task, "context": {"raw_thought": state.raw_thought}},
+        "id": "call_opendots_123"
+    }])
     res = await tool_node.ainvoke({"messages": [msg]})
     log_output = res["messages"][-1].content
-
-    return {"opendots_log": log_output}
+    return {"opendots_log": f"{founder}\n\n{master}\n\n{log_output}"}
 
 async def node_aggregator(state: BlackboardState) -> Dict:
     """Wait for all parallel branches to finish and aggregate results."""
