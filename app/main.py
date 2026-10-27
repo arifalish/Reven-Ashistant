@@ -110,6 +110,9 @@ async def process_scraper_callback(mission_id: str, csv_data: str):
 @app.post("/api/v1/orchestrate")
 async def orchestrate(request: Request):
     """Validate and enqueue Telegram webhook updates for async worker execution."""
+    expected_secret = settings.TELEGRAM_WEBHOOK_SECRET
+    if expected_secret and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != expected_secret:
+        raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
     try:
         payload = await request.json()
     except Exception:
