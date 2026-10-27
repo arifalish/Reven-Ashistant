@@ -239,6 +239,15 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
         report_sections.append(state.opendots_log)
 
     final_report = "\n".join(report_sections)
+    try:
+        final_report = await skill_registry.execute_skill(
+            "humanizer-core-skill",
+            "Polish this report for clarity and natural wording without changing facts, code, IDs, or data.",
+            {"report": final_report},
+        )
+    except Exception:
+        # Preserve the compiled report if the optional humanizer model is unavailable.
+        pass
 
     return {
         "final_report": final_report
