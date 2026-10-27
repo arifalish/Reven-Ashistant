@@ -162,7 +162,7 @@ async def node_branch_d_coworker(state: BlackboardState) -> Dict:
         skill_registry.execute_skill("arena-skill", "Review the proposed plan for gaps, risks and measurable success criteria.", context),
         skill_registry.execute_skill("opendots-coworker-skill", "Produce an operational coworker checklist with clear next actions.", context),
     ]
-    if re.search(r"\\b(invest|trading|portfolio|stock|market analysis|financial model)\\b", state.raw_thought, re.I):
+    if re.search(r"\b(invest|trading|portfolio|stock|market analysis|financial model)\b", state.raw_thought, re.I):
         skill_calls.append(skill_registry.execute_skill("trader-skill", "Analyze the financial/trading aspect and clearly state assumptions and risks.", context))
     skill_results = await asyncio.gather(*skill_calls)
     founder, master, arena_review, opendots_plan = skill_results[:4]
