@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 import json
 import asyncio
 import uuid
+import os
 
 from core.task_queue import task_queue
 from core.agent_workers import run_worker
@@ -15,31 +16,44 @@ from interfaces.telegram_bot import TelegramBot
 app = FastAPI(title="Autonomous Multi-Agent OS", version="1.0.0")
 
 telegram_bot = TelegramBot(settings.TELEGRAM_BOT_TOKEN)
-_worker_task = None
+_worker_tasks = []
+_chat_locks = {}
 
 async def _handle_telegram_update(task: QueuedTask):
-    """Run one Telegram update from the shared queue."""
+    """Run one Telegram update; serialize updates per chat while allowing other chats in parallel."""
     payload = task.payload.get("update")
     if not isinstance(payload, dict):
         raise ValueError("Queued Telegram update payload must be an object")
-    await process_mission(payload)
+    message = payload.get("message") or (payload.get("callback_query") or {}).get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    if chat_id is None:
+        await process_mission(payload)
+        return
+    lock = _chat_locks.setdefault(str(chat_id), asyncio.Lock())
+    async with lock:
+        await process_mission(payload)
 
 @app.on_event("startup")
 async def start_agent_worker():
-    global _worker_task
-    if _worker_task is None or _worker_task.done():
-        _worker_task = asyncio.create_task(run_worker(_handle_telegram_update))
+    global _worker_tasks
+    if not _worker_tasks or all(task.done() for task in _worker_tasks):
+        worker_count = max(1, min(8, int(os.getenv("AGENT_WORKER_CONCURRENCY", "3"))))
+        _worker_tasks = [
+            asyncio.create_task(run_worker(_handle_telegram_update))
+            for _ in range(worker_count)
+        ]
 
 @app.on_event("shutdown")
 async def stop_agent_worker():
-    global _worker_task
-    if _worker_task is not None:
-        _worker_task.cancel()
+    global _worker_tasks
+    for worker in _worker_tasks:
+        worker.cancel()
+    for worker in _worker_tasks:
         try:
-            await _worker_task
+            await worker
         except asyncio.CancelledError:
             pass
-        _worker_task = None
+    _worker_tasks = []
 
 @app.get("/")
 async def root():
