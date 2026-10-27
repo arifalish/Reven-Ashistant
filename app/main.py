@@ -136,9 +136,9 @@ async def process_mission(payload: dict):
     """
     Background task to handle the full lifecycle of a mission.
     """
-    if "message" in payload and "text" in payload["message"]:
+    if isinstance(payload.get("message"), dict) and (payload["message"].get("text") or payload["message"].get("caption")):
         chat_id = payload["message"]["chat"]["id"]
-        text = payload["message"]["text"]
+        text = payload["message"].get("text") or payload["message"].get("caption")
 
         # We may receive message_id from cloudflare worker, or we might need to send one ourselves
         message_id = payload.get("mission_control_message_id")
