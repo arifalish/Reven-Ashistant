@@ -89,15 +89,21 @@ User message:
 {text}
 
 Include multiple teams when the request spans domains. No markdown, no explanation."""
+    model_failed = False
     try:
         response = await router.generate_tier1(prompt)
         model_routes = _parse_routes(response)
     except Exception:
         model_routes = []
+        model_failed = True
 
     # Blend model interpretation with high-confidence keyword routes so a weak
     # model response cannot silently drop an obvious requested workstream.
     combined = list(dict.fromkeys(deterministic + [
         node for node in model_routes if node != "general_chat"
     ]))
-    return combined or model_routes or ["branch_d_coworker"]
+    if combined:
+        return combined
+    # Invalid model output should not trigger an unsolicited work mission.
+    # A transport/model failure can still use the safe general-work fallback.
+    return ["branch_d_coworker"] if model_failed else ["general_chat"]
