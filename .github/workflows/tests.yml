@@ -26,3 +26,4 @@ jobs:
           CF_GATEWAY_URL: https://gateway.ai.cloudflare.com/v1/mock-account/mock-gateway
         run: pytest -q
 # Keep this workflow on the latest PR head so supervisor and skill-DAG tests are validated together.
+# Validate the webhook-secret and general-chat handling changes too.
