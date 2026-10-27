@@ -19,7 +19,7 @@ SKILL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "x-agent-skill": {"department": "content", "description": "X/Twitter posts, threads and social hooks.", "keywords": r"twitter|\bx\b|thread"},
     "founder-skill": {"department": "strategy", "description": "Startup strategy, product validation, go-to-market and unit economics.", "keywords": r"startup|founder|business plan|validate|strategy"},
     "trader-skill": {"department": "strategy", "description": "Market and portfolio analysis with explicit assumptions and risk caveats.", "keywords": r"trading|portfolio|stock|market analysis|investment"},
-    "replica-skill": {"department": "engineering", "description": "Software architecture, implementation plans, code and product parity.", "keywords": r"code|coding|website|web app|mobile app|api|debug|software|repository|github|deploy"},
+    "replica-skill": {"department": "engineering", "description": "Software architecture, implementation plans, code and product parity.", "keywords": r"code|coding|build|develop|web app|mobile app|api|debug|software|repository|github|deploy"},
     "arena-skill": {"department": "engineering", "description": "Review complex engineering solutions, compare approaches and identify defects.", "keywords": r"complex code|review code|code tournament|architecture|debug"},
     "master-skills": {"department": "strategy", "description": "Coordinate cross-functional plans, video retention, and full-stack work.", "keywords": r"coordinate|full.?stack|master plan"},
     "google-maps-scraper-kit": {"department": "growth", "description": "Collect local business leads from a configured Google Maps scraper service; never fabricate records.", "keywords": r"scrape|google maps|local businesses|business leads|companies in|leads"},
