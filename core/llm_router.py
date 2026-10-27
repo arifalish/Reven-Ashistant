@@ -84,7 +84,7 @@ class LLMRouter:
             await asyncio.sleep(1)
 
         try:
-            return await self._call_model(self.primary_client, "meta/llama-3.1-70b-instruct", prompt)
+            return await self._call_model(self.primary_client, "meta/llama-3.3-70b-instruct", prompt)
         except Exception as e:
             if "mock-account" in settings.CF_GATEWAY_URL or "mock" in settings.NVIDIA_API_KEY:
                 if "Analyze the following user task/thought" in prompt:
