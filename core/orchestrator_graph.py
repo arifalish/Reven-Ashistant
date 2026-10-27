@@ -16,7 +16,8 @@ from workers.maps_scraper_worker import scraper_worker
 from middleware.quality_humanizer import clean_and_humanize
 from skills.browser_agent import run_browser_task
 
-from core.supervisor_router import analyze_task_and_route\nfrom core.skill_supervisor import plan_skills, execute_skill_plan, SKILL_REGISTRY, DEPARTMENT_NODES
+from core.supervisor_router import analyze_task_and_route
+from core.skill_supervisor import plan_skills, execute_skill_plan, SKILL_REGISTRY, DEPARTMENT_NODES
 
 async def node_supervisor(state: BlackboardState) -> Dict:
     """Phase 1: Dynamic Supervisor & Routing"""
