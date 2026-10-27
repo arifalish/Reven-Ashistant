@@ -2,7 +2,12 @@ import asyncio
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Depends
 from fastapi.responses import JSONResponse
 import json
+import asyncio
+import uuid
 
+from core.task_queue import task_queue
+from core.agent_workers import run_worker
+from core.task_queue import QueuedTask
 from core.config import settings
 from core.orchestrator_graph import run_orchestrator, resume_orchestrator
 from interfaces.telegram_bot import TelegramBot
@@ -10,6 +15,31 @@ from interfaces.telegram_bot import TelegramBot
 app = FastAPI(title="Autonomous Multi-Agent OS", version="1.0.0")
 
 telegram_bot = TelegramBot(settings.TELEGRAM_BOT_TOKEN)
+_worker_task = None
+
+async def _handle_telegram_update(task: QueuedTask):
+    """Run one Telegram update from the shared queue."""
+    payload = task.payload.get("update")
+    if not isinstance(payload, dict):
+        raise ValueError("Queued Telegram update payload must be an object")
+    await process_mission(payload)
+
+@app.on_event("startup")
+async def start_agent_worker():
+    global _worker_task
+    if _worker_task is None or _worker_task.done():
+        _worker_task = asyncio.create_task(run_worker(_handle_telegram_update))
+
+@app.on_event("shutdown")
+async def stop_agent_worker():
+    global _worker_task
+    if _worker_task is not None:
+        _worker_task.cancel()
+        try:
+            await _worker_task
+        except asyncio.CancelledError:
+            pass
+        _worker_task = None
 
 @app.get("/")
 async def root():
@@ -64,19 +94,29 @@ async def process_scraper_callback(mission_id: str, csv_data: str):
 
 
 @app.post("/api/v1/orchestrate")
-async def orchestrate(request: Request, background_tasks: BackgroundTasks):
-    """
-    Endpoint receiving webhooks forwarded from Edge/Cloudflare Worker.
-    """
+async def orchestrate(request: Request):
+    """Validate and enqueue Telegram webhook updates for async worker execution."""
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Process asynchronously to free up the request immediately
-    background_tasks.add_task(process_mission, payload)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Webhook payload must be an object")
+    update_id = payload.get("update_id")
+    task_id = f"telegram-update-{update_id}" if update_id is not None else str(uuid.uuid4())
+    try:
+        await task_queue.enqueue(
+            mission_id=task_id,
+            agent="telegram-supervisor",
+            payload={"update": payload},
+            priority=10,
+            task_id=task_id,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Unable to enqueue Telegram update: {exc}")
 
-    return {"status": "Mission accepted"}
+    return {"status": "queued", "task_id": task_id, "queue_depth": task_queue.qsize()}
 
 async def process_mission(payload: dict):
     """
