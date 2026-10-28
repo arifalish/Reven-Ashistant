@@ -313,17 +313,22 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
 
             # Execute the original skill package first, preserving its tools/workflow.
             # Specialist agents then enrich that real skill artifact; package failures remain visible.
+            base_artifact = ""
+            base_error = ""
             try:
                 base_artifact = await skill_registry.execute_skill(skill_id, task, context=worker_context)
             except Exception as exc:
-                return skill_id, {"status": "failed", "error": f"Skill package execution failed: {type(exc).__name__}", "subagents": []}
+                # A skill-package failure must not suppress its registered specialists.
+                # Specialists may still produce a useful bounded result via the model router.
+                base_error = f"Base skill package unavailable: {type(exc).__name__}"
 
             # Run every registered sub-agent as a real, bounded model-backed worker.
             # Individual outputs are kept as blackboard artifacts and then synthesized.
             subagents = SUBAGENT_REGISTRY.get(skill_id, [])
             if not subagents:
-                result = await skill_registry.execute_skill(skill_id, task, context=worker_context)
-                return skill_id, {"status": "completed", "output": result, "subagents": []}
+                if base_artifact:
+                    return skill_id, {"status": "completed", "output": base_artifact, "subagents": []}
+                return skill_id, {"status": "failed", "error": base_error or "No skill implementation or specialists registered", "subagents": []}
 
             semaphore = asyncio.Semaphore(4)
             async def run_subagent(agent: Dict[str, str]) -> Dict[str, Any]:
