@@ -245,11 +245,18 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                         f"User request: {query}\\nTool evidence: {evidence[:7000]}\\n"
                         "Return a concrete artifact; do not claim actions beyond the evidence."
                     )
-                    try:
-                        output = await asyncio.wait_for(router.generate_tier3(prompt), timeout=75)
-                        return {"id": agent["id"], "name": agent["name"], "status": "completed", "output": output}
-                    except Exception as exc:
-                        return {"id": agent["id"], "name": agent["name"], "status": "failed", "error": type(exc).__name__}
+                    last_error = None
+                    for attempt in range(2):
+                        try:
+                            # Limit fan-out pressure and retry one transient provider failure.
+                            await asyncio.sleep(0.4 * attempt)
+                            output = await asyncio.wait_for(router.generate_tier3(prompt), timeout=75)
+                            if output and output.strip():
+                                return {"id": agent["id"], "name": agent["name"], "status": "completed", "output": output.strip()}
+                            last_error = "EmptyModelResponse"
+                        except Exception as exc:
+                            last_error = type(exc).__name__
+                    return {"id": agent["id"], "name": agent["name"], "status": "failed", "error": str(last_error or "ModelUnavailable")}
                 return await asyncio.gather(*(run_role(role) for role in roles))
 
             if skill_id == "google-maps-scraper-kit":
@@ -351,7 +358,25 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
             subagent_results = await asyncio.gather(*(run_subagent(agent) for agent in subagents))
             completed = [item for item in subagent_results if item["status"] == "completed"]
             if not completed:
-                return skill_id, {"status": "failed", "error": "All registered sub-agents failed", "subagents": subagent_results}
+                # Do not discard a valid skill-package result just because every
+                # optional specialist call hit a temporary provider failure.
+                if base_artifact and base_artifact.strip():
+                    return skill_id, {
+                        "status": "completed",
+                        "output": base_artifact.strip(),
+                        "warning": "Specialist agents were unavailable; returned the base skill result.",
+                        "subagents": subagent_results,
+                        "subagent_count": len(subagents),
+                        "subagents_completed": 0,
+                    }
+                failure_types = sorted({str(item.get("error", "UnknownError")) for item in subagent_results})
+                return skill_id, {
+                    "status": "failed",
+                    "error": "AI provider unavailable after retry (" + ", ".join(failure_types) + "). Check NVIDIA/OpenRouter/Cloudflare provider connectivity and quotas.",
+                    "subagents": subagent_results,
+                    "subagent_count": len(subagents),
+                    "subagents_completed": 0,
+                }
             synthesis_prompt = (
                 f"Synthesize these specialist outputs for skill {skill_id}.\\n"
                 f"Original request: {query}\\n"
@@ -363,9 +388,14 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 synthesized = await asyncio.wait_for(router.generate_tier3(synthesis_prompt), timeout=75)
             except Exception:
                 synthesized = "\\n\\n".join(f"### {item['name']}\\n{item['output']}" for item in completed)
+            if not synthesized or not synthesized.strip():
+                synthesized = base_artifact.strip() or "\\n\\n".join(
+                    f"{item['name']}: {item['output']}" for item in completed
+                )
             return skill_id, {
                 "status": "completed",
                 "output": synthesized,
+                "warning": base_error or "",
                 "subagents": subagent_results,
                 "subagent_count": len(subagents),
                 "subagents_completed": len(completed),
