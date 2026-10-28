@@ -43,9 +43,11 @@ async def test_end_to_end_orchestrator():
     assert isinstance(res2, str), f"Expected str but got {type(res2)}: {res2}"
 
     print(f"[Test] Final Report length: {len(res2)}")
-    assert "### 🧠 Master Strategy" in res2
-    assert "### 🗂️ Supervisor Execution Plan" in res2
-    assert "### 🤖 Specialized Skill Results" in res2
+    # The user-facing report is intentionally concise plain text now;
+    # assert useful execution evidence rather than legacy verbose markdown sections.
+    assert "Skills:" in res2
+    assert "Founder" in res2
+    assert "agents:" in res2
 
 
 
