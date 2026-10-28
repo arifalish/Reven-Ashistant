@@ -247,24 +247,81 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
     """Phase 4b: Mandatory Humanizer Gate and Final Report Compiler"""
 
     report_sections = []
-    report_sections.append(f"### 🧠 Master Strategy\n{state.founder_strategy.get('summary', '')}\n")
+    skill_labels = {
+        "instagram-agent-skill": "Instagram",
+        "youtube-agent-skill": "YouTube",
+        "linkedin-agent-skill": "LinkedIn",
+        "x-agent-skill": "X",
+        "founder-skill": "Founder",
+        "trader-skill": "Trading",
+        "replica-skill": "Coding",
+        "arena-skill": "Review",
+        "master-skills": "Coordinator",
+        "google-maps-scraper-kit": "Maps Leads",
+        "sales-desk-skill": "Sales",
+        "humanizer-core-skill": "Writing Polish",
+        "seo-agent-skill": "SEO",
+        "browser-agent-skill": "Browser",
+        "opendots-coworker-skill": "Coworker",
+    }
+    subagent_labels = {
+        "idea_trend_scout": "Ideas",
+        "script_architect": "Script",
+        "thumbnail_title_optimizer": "Thumbnail",
+        "seo_metadata_specialist": "SEO",
+        "visual_content_analyst": "Visuals",
+        "caption_hook_writer": "Caption",
+        "dm_comment_responder": "DM Replies",
+        "growth_analytics_monitor": "Growth",
+        "thought_leadership_drafter": "Post",
+        "network_engagement_bot": "Engagement",
+        "inmail_outreach_specialist": "Outreach",
+        "thread_architect": "Thread",
+        "realtime_trend_monitor": "Trends",
+        "community_manager": "Community",
+        "keyword_serp_analyzer": "Keywords",
+        "onpage_optimizer": "On-page SEO",
+        "content_gap_identifier": "Content Gaps",
+        "schema_technical_validator": "Schema",
+    }
+
     if state.selected_skills:
-        report_sections.append(
-            "### 🗂️ Supervisor Execution Plan\n"
-            + ", ".join(state.selected_skills)
-            + f"\n\nReason: {state.skill_plan_reasoning}"
-        )
+        visible_skills = [
+            skill_labels.get(skill_id, skill_id)
+            for skill_id in state.selected_skills
+            if skill_id != "humanizer-core-skill"
+        ]
+        if visible_skills:
+            report_sections.append("🧠 Skills: " + ", ".join(visible_skills))
+
     if state.skill_results:
-        report_sections.append("### 🤖 Specialized Skill Results")
         for skill_id in state.selected_skills:
             result = state.skill_results.get(skill_id)
-            if not result:
+            if not result or skill_id == "humanizer-core-skill":
                 continue
+            label = skill_labels.get(skill_id, skill_id)
             if result.get("status") == "failed":
-                report_sections.append(f"**{skill_id} — failed**\n{result.get('error', 'Unknown error')}")
-            else:
-                report_sections.append(f"**{skill_id}**\n{result.get('output', '')}")
+                report_sections.append(f"⚠️ {label}: failed — {result.get('error', 'No details available')}")
+                continue
 
+            subagents = result.get("subagents", [])
+            completed_agents = [
+                subagent_labels.get(agent.get("id"), agent.get("name", "Agent"))
+                for agent in subagents
+                if agent.get("status") == "completed"
+            ]
+            if completed_agents:
+                report_sections.append(f"🤖 {label} agents: " + ", ".join(completed_agents))
+
+            output = str(result.get("output", "")).strip()
+            if output:
+                # Keep Telegram responses readable; do not dump orchestration JSON/process logs.
+                if len(output) > 1600:
+                    output = output[:1597].rstrip() + "..."
+                report_sections.append(f"✅ {label}\n{output}")
+
+    if not report_sections:
+        report_sections.append("I couldn't complete the task. Please send the request again with a little more detail.")
     if "branch_a_sales" in state.next_nodes and (state.b2b_emails or state.leads_csv):
         humanized_b2b = [clean_and_humanize(email) for email in state.b2b_emails if email]
         report_sections.append("### 🎯 Sales & Leads")
@@ -290,28 +347,11 @@ async def node_linter_and_humanizer(state: BlackboardState) -> Dict:
         report_sections.append("\n### 🤖 OpenDots Coworker Log")
         report_sections.append(state.opendots_log)
 
-    final_report = "\n".join(report_sections)
-    try:
-        candidate_report = await skill_registry.execute_skill(
-            "humanizer-core-skill",
-            "Polish this report for clarity and natural wording without changing facts, code, IDs, or data. "
-            "Preserve all section headings and all worker outputs.",
-            {"report": final_report},
-        )
-        # A weak/mock model can return unrelated canned text. Never replace the
-        # synthesized report unless the essential execution-plan structure survives.
-        if candidate_report and (
-            not state.selected_skills
-            or "### 🗂️ Supervisor Execution Plan" in candidate_report
-        ):
-            final_report = candidate_report
-    except Exception:
-        # Preserve the compiled report if the optional humanizer model is unavailable.
-        pass
+    # Keep the final Telegram report deterministic and concise. Do not run a second
+    # LLM pass that can overwrite a correct result with unrelated text.
+    final_report = "\n\n".join(report_sections).strip()
 
-    return {
-        "final_report": final_report
-    }
+    return {"final_report": final_report}
 
 
 # Build LangGraph
