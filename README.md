@@ -5,7 +5,7 @@ Natural-language multi-agent assistant built with FastAPI, LangGraph and a centr
 ## Deploy on Render
 
 1. Create a Render Blueprint from this repository. Render reads `render.yaml` and builds the Dockerfile.
-2. Set `NVIDIA_API_KEY` to a valid NVIDIA NIM API key and `TELEGRAM_BOT_TOKEN` to the token from BotFather. Do not leave either as a mock/default value.
+2. Set `NVIDIA_API_KEY` to a valid NVIDIA NIM API key and `TELEGRAM_BOT_TOKEN` to the token from BotFather. Do not leave either as a mock/default value. The LLM router now discovers available NVIDIA models at runtime and fails over when a model is retired or unsupported. It re-reads environment credentials on each task. For key rotation, optionally set `NVIDIA_API_KEYS` to a comma-separated list of valid NVIDIA keys; protect these as Render secrets. API keys are static credentials, not refreshable OAuth tokens, so create/rotate them in NVIDIA's console and update Render when needed.
 3. Deploy. At container startup, `scripts/start.py` uses Render's `RENDER_EXTERNAL_URL` to call Telegram `setWebhook` automatically and supplies `TELEGRAM_WEBHOOK_SECRET` when configured. You do not need to set the webhook manually if Telegram accepts the request.
 4. Open the Render service URL and check `GET /` for the health response. Check Render logs for the line `Telegram webhook configured`. If auto-configuration fails, logs show a warning and the service still starts; configure the webhook manually to `https://YOUR-RENDER-SERVICE.onrender.com/api/v1/orchestrate`.
 5. Optional integrations:
