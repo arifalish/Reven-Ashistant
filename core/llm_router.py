@@ -18,9 +18,6 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from core.config import settings
 
-
-# Prefer the current catalog, but discover models from the account's /v1/models
-# endpoint at runtime. The static list is only a fallback if discovery is unavailable.
 FALLBACK_MODELS = (
     "nvidia/deepseek-v4.1-flash",
     "deepseek-ai/deepseek-v4-flash-0731",
@@ -28,25 +25,29 @@ FALLBACK_MODELS = (
     "qwen/qwen3-next-80b-a3b-instruct",
     "meta/llama-3.1-8b-instruct",
 )
-TRANSIENT_ERRORS = (
-    APIConnectionError,
-    APITimeoutError,
-    InternalServerError,
-    RateLimitError,
-)
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_FREE_MODEL = "openrouter/free"
+TRANSIENT_ERRORS = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
+
+
+def _configured_value(env_name: str, settings_value: str = "") -> str:
+    return (os.getenv(env_name) or settings_value or "").strip()
 
 
 def _current_api_keys() -> list[str]:
-    """Re-read environment on every task so Render secret rotations take effect."""
     raw = os.getenv("NVIDIA_API_KEYS") or os.getenv("NVIDIA_API_KEY") or settings.NVIDIA_API_KEY
     keys = [item.strip() for item in raw.split(",") if item.strip()]
     return keys or [""]
 
 
+def _openrouter_key() -> str:
+    return _configured_value("OPENROUTER_API_KEY", getattr(settings, "OPENROUTER_API_KEY", ""))
+
+
 def _mock_mode() -> bool:
-    return all(
-        key.lower().startswith(("mock-", "test-", "mock_", "test_"))
-        for key in _current_api_keys()
+    keys = _current_api_keys()
+    return bool(keys) and all(
+        key.lower().startswith(("mock-", "test-", "mock_", "test_")) for key in keys
     )
 
 
@@ -78,7 +79,6 @@ local_bucket = InMemoryTokenBucket(capacity=100, refill_rate=10.0)
 
 
 async def check_rate_limit(key: str, limit: int = 100, window: int = 60) -> bool:
-    """Check a Redis fixed-window limit, falling back to an in-process token bucket."""
     if redis_client:
         try:
             current = await redis_client.get(key)
@@ -102,27 +102,18 @@ class LLMRouter:
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._cache_seconds = 300
 
-        # Groq credentials are also read afresh for each call.
-        self.groq_client = AsyncOpenAI(
-            api_key=os.getenv("GROQ_API_KEY") or settings.GROQ_API_KEY,
-            base_url="https://api.groq.com/openai/v1",
-        )
-
     def _base_url(self) -> str:
-        gateway = (os.getenv("CF_GATEWAY_URL") or settings.CF_GATEWAY_URL or "").rstrip("/")
+        gateway = _configured_value("CF_GATEWAY_URL", settings.CF_GATEWAY_URL).rstrip("/")
         if not gateway or "mock-account" in gateway:
             return "https://integrate.api.nvidia.com/v1"
         return f"{gateway}/openai/v1"
 
     async def _next_task_credentials(self) -> tuple[str, AsyncOpenAI]:
-        # A new task starts with the next configured key. Keys may be supplied as a
-        # comma-separated NVIDIA_API_KEYS secret; a single NVIDIA_API_KEY also works.
         async with self._task_lock:
             keys = _current_api_keys()
             key = keys[self._key_index % len(keys)]
             self._key_index = (self._key_index + 1) % max(1, len(keys))
-        client = AsyncOpenAI(api_key=key, base_url=self._base_url(), timeout=45.0, max_retries=0)
-        return key, client
+        return key, AsyncOpenAI(api_key=key, base_url=self._base_url(), timeout=45.0, max_retries=0)
 
     async def _available_models(self, client: AsyncOpenAI, cache_key: str) -> list[str]:
         now = time.monotonic()
@@ -132,8 +123,6 @@ class LLMRouter:
         try:
             response = await client.models.list()
             discovered = [item.id for item in response.data if getattr(item, "id", None)]
-            # Keep catalog order as provider returned it, but try preferred agent-capable
-            # models first when present.
             ordered = [model for model in FALLBACK_MODELS if model in discovered]
             ordered += [model for model in discovered if model not in ordered]
             models = ordered or list(FALLBACK_MODELS)
@@ -151,25 +140,39 @@ class LLMRouter:
         )
         return response.choices[0].message.content or ""
 
-    async def _generate(self, prompt: str, tier: str) -> str:
-        """Discover models and fail over on retired/unsupported model IDs."""
+    async def _try_openrouter(self, prompt: str) -> str:
+        """Use OpenRouter's free-only model router when a key is configured."""
+        key = _openrouter_key()
+        if not key or key.lower().startswith(("mock-", "test-", "mock_", "test_")):
+            raise RuntimeError("OPENROUTER_API_KEY is not configured.")
+        client = AsyncOpenAI(
+            api_key=key,
+            base_url=OPENROUTER_BASE_URL,
+            timeout=45.0,
+            max_retries=0,
+            default_headers={
+                "HTTP-Referer": "https://github.com/arifalish/Reven-Ashistant",
+                "X-Title": "Reven Assistant",
+            },
+        )
+        return await self._call_model(client, OPENROUTER_FREE_MODEL, prompt)
+
+    async def _generate_nvidia(self, prompt: str) -> str:
         keys = _current_api_keys()
-        # Rotate start key per task and retry other configured keys only on auth errors.
         _, first_client = await self._next_task_credentials()
         clients = [first_client]
-        for key in keys:
-            if key != keys[(self._key_index - 1) % len(keys)]:
+        start_index = (self._key_index - 1) % len(keys)
+        for index, key in enumerate(keys):
+            if index != start_index:
                 clients.append(AsyncOpenAI(api_key=key, base_url=self._base_url(), timeout=45.0, max_retries=0))
 
         last_error: Optional[Exception] = None
         attempted: set[tuple[str, str]] = set()
         for client in clients:
-            try:
-                cache_key = client.base_url + ":" + hashlib.sha256((client.api_key or "").encode()).hexdigest()[:12]\n                models = await self._available_models(client, cache_key)
-            except Exception:
-                models = list(FALLBACK_MODELS)
+            cache_key = str(client.base_url) + ":" + hashlib.sha256((client.api_key or "").encode()).hexdigest()[:12]
+            models = await self._available_models(client, cache_key)
             for model in models:
-                marker = (client.api_key, model)
+                marker = (client.api_key or "", model)
                 if marker in attempted:
                     continue
                 attempted.add(marker)
@@ -177,28 +180,33 @@ class LLMRouter:
                     return await self._call_model(client, model, prompt)
                 except APIStatusError as exc:
                     last_error = exc
-                    # Permanent model/account errors should trigger model/key failover,
-                    # not exponential retries of the same retired model.
-                    if exc.status in (400, 401, 403, 404, 410):
+                    if exc.status in (400, 401, 403, 404, 410, 429) or exc.status >= 500:
                         if exc.status in (401, 403):
                             break
-                        continue
-                    if exc.status == 429 or exc.status >= 500:
                         continue
                     raise
                 except TRANSIENT_ERRORS as exc:
                     last_error = exc
                     continue
+        if last_error:
+            raise RuntimeError(f"All configured NVIDIA models/keys failed: {last_error}") from last_error
+        raise RuntimeError("No usable NVIDIA model or API key was available.")
 
+    async def _generate(self, prompt: str, tier: str) -> str:
+        """Try OpenRouter free models first, then configured NVIDIA models."""
+        errors: list[str] = []
+        if _openrouter_key():
+            try:
+                return await self._try_openrouter(prompt)
+            except Exception as exc:
+                errors.append(f"OpenRouter free router: {exc}")
+        try:
+            return await self._generate_nvidia(prompt)
+        except Exception as exc:
+            errors.append(f"NVIDIA fallback: {exc}")
         if _mock_mode():
             return self._mock_response(prompt, tier)
-        if last_error:
-            raise RuntimeError(
-                "All configured NVIDIA models/keys failed. Check NVIDIA_API_KEY or "
-                "NVIDIA_API_KEYS in Render and confirm at least one model is enabled for this key. "
-                f"Last provider error: {last_error}"
-            ) from last_error
-        raise RuntimeError("No usable NVIDIA model or API key was available.")
+        raise RuntimeError("All configured AI providers failed. " + " | ".join(errors))
 
     @staticmethod
     def _mock_response(prompt: str, tier: str) -> str:
@@ -228,29 +236,25 @@ class LLMRouter:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_exception_type(TRANSIENT_ERRORS))
     async def generate_tier1(self, prompt: str) -> str:
-        """Master coordination, founder strategy and supervisor routing."""
         return await self._tier(prompt, "tier1", 50)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_exception_type(TRANSIENT_ERRORS))
     async def generate_tier2(self, prompt: str) -> str:
-        """Code and reverse-engineering tier."""
         return await self._tier(prompt, "tier2", 50)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_exception_type(TRANSIENT_ERRORS))
     async def generate_tier3(self, prompt: str) -> str:
-        """Creative and content generation tier."""
         return await self._tier(prompt, "tier3", 100)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5),
            retry=retry_if_exception_type(TRANSIENT_ERRORS))
     async def generate_tier4(self, prompt: str) -> str:
-        """Bulk generation tier with Groq fallback."""
         try:
             return await self._tier(prompt, "tier4", 200)
         except Exception as primary_error:
-            groq_key = os.getenv("GROQ_API_KEY") or settings.GROQ_API_KEY
+            groq_key = _configured_value("GROQ_API_KEY", settings.GROQ_API_KEY)
             if not groq_key or groq_key.lower().startswith(("mock-", "test-", "mock_", "test_")):
                 if _mock_mode():
                     return f"[Mocked Tier 4 Response for tests] {prompt[:50]}..."
