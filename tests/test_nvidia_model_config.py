@@ -42,7 +42,6 @@ def test_mock_mode_requires_all_configured_test_keys(monkeypatch):
     assert llm_router._mock_mode() is False
 
 
-
 def test_cloudflare_workers_ai_config_is_read_from_environment(monkeypatch):
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "account-123")
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token")
@@ -61,10 +60,10 @@ def test_provider_chain_includes_cloudflare_before_nvidia():
     assert source.index("_try_openrouter") < source.index("_try_cloudflare") < source.index("_generate_nvidia")
 
 
-def test_nvidia_fallback_prioritizes_kimi_deepseek_glm_and_qwen():
+def test_nvidia_fallback_prioritizes_healthy_model_then_kimi_deepseek_glm_and_qwen():
     models = llm_router.FALLBACK_MODELS
-    assert models[0] == "moonshotai/kimi-k3"
-    assert "deepseek-ai/deepseek-v4-flash" in models
+    assert models[0] == "nvidia/nemotron-3.5-lightning-30b-a3b"
+    assert models.index("moonshotai/kimi-k3") < models.index("deepseek-ai/deepseek-v4-flash")
     assert "z-ai/glm-5.3-flash" in models
     assert "qwen/qwen3-next-80b-a3b-instruct" in models
 
