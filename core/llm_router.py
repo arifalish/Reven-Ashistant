@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 # Prefer chat-capable NVIDIA-hosted models in a deliberate order, then append
 # additional chat models discovered from the live /models endpoint.
 FALLBACK_MODELS = (
+    # Render logs confirmed this model succeeds; try it before flaky/deprecated candidates.
+    "nvidia/nemotron-3.5-lightning-30b-a3b",
     "moonshotai/kimi-k3",
     "moonshotai/kimi-k2-instruct",
     "moonshotai/kimi-k2-thinking",
@@ -143,7 +145,7 @@ class LLMRouter:
         client = AsyncOpenAI(
             api_key=token,
             base_url=f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
-            timeout=45.0,
+            timeout=15.0,
             max_retries=0,
         )
         return await self._call_model(client, model, prompt)
@@ -224,6 +226,8 @@ class LLMRouter:
             cache_key = str(client.base_url) + ":" + key_fingerprint
             models = await self._available_models(client, cache_key)
             key_auth_failed = False
+            # Bound provider failover latency: do not try an unbounded catalogue for every Telegram message.
+            model_attempts = 0
             for model in models:
                 marker = (key_fingerprint, model)
                 if marker in attempted:
@@ -232,6 +236,10 @@ class LLMRouter:
                 if self._model_cooldowns.get(marker, 0.0) > time.monotonic():
                     logger.debug("Skipping NVIDIA model %s during cooldown", model)
                     continue
+                if model_attempts >= 4:
+                    logger.warning("Reached NVIDIA per-key model attempt limit; rotating to next key")
+                    break
+                model_attempts += 1
                 try:
                     answer = await self._call_model(client, model, prompt)
                     self._model_cooldowns.pop(marker, None)
