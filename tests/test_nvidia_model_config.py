@@ -76,3 +76,10 @@ def test_rate_limited_models_get_cooldown():
 def test_non_chat_models_are_filtered_from_discovery():
     assert "embed" in llm_router.NON_CHAT_MODEL_MARKERS
     assert "safety" in llm_router.NON_CHAT_MODEL_MARKERS
+
+
+async def test_sticky_model_memory_remembers_last_success(monkeypatch):
+    monkeypatch.setattr(llm_router, "redis_client", None)
+    instance = llm_router.LLMRouter()
+    await instance._remember_preferred_model("provider:key-fingerprint", "nvidia/healthy-model")
+    assert await instance._get_preferred_model("provider:key-fingerprint") == "nvidia/healthy-model"
