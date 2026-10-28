@@ -7,10 +7,13 @@ import asyncio
 import json
 import os
 import re
+import logging
 from typing import Any, Dict, List
 
 from core.skill_loader import skill_registry
 from core.llm_router import router
+
+logger = logging.getLogger(__name__)
 
 SKILL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "instagram-agent-skill": {"department": "content", "description": "Instagram reels, hooks, captions, hashtags and campaign content.", "keywords": r"instagram|reel|caption|hashtag"},
@@ -339,7 +342,10 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
 
             # NVIDIA/free-provider endpoints can transiently fail under fan-out. Keep
             # concurrency bounded and retry each worker once before marking it failed.
-            semaphore = asyncio.Semaphore(2)
+            # Free-tier inference endpoints frequently reset simultaneous requests.
+            # Execute specialists serially, with bounded retries, so a four-agent team
+            # does not stampede the same provider and mark every worker failed together.
+            semaphore = asyncio.Semaphore(1)
             async def run_subagent(agent: Dict[str, str]) -> Dict[str, Any]:
                 prompt = (
                     f"You are the {agent['name']} sub-agent for skill {skill_id}.\\n"
@@ -347,24 +353,28 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                     f"Original user request: {query}\\n"
                     f"Skill mission: {task}\\n"
                     f"Context and shared blackboard: {json.dumps(worker_context, ensure_ascii=False, default=str)[:6000]}\\n"
-                    "Return a concrete artifact for your role in a concise format. State missing data and tool limitations. "
+                    "Produce a usable, specific deliverable for your role, not a plan to do the work. "
+                    "Use headings, examples, and concrete content where appropriate. State missing data and tool limitations. "
                     "Never invent live metrics, scraped records, completed actions or sources."
                 )
                 last_error = None
                 async with semaphore:
-                    for attempt in range(2):
+                    for attempt in range(3):
                         try:
                             if attempt:
-                                await asyncio.sleep(0.5)
-                            output = await asyncio.wait_for(router.generate_tier3(prompt), timeout=60)
+                                await asyncio.sleep(min(2.0 * attempt, 4.0))
+                            output = await asyncio.wait_for(router.generate_tier3(prompt), timeout=90)
                             if output and output.strip():
-                                return {"id": agent["id"], "name": agent["name"], "status": "completed", "output": output.strip()}
+                                return {"id": agent["id"], "name": agent["name"], "status": "completed", "output": output.strip(), "attempts": attempt + 1}
                             last_error = "EmptyModelResponse"
                         except Exception as exc:
                             last_error = type(exc).__name__
-                return {"id": agent["id"], "name": agent["name"], "status": "failed", "error": str(last_error or "ModelUnavailable")}
+                            logger.warning("Sub-agent %s failed attempt %s for %s: %s", agent["id"], attempt + 1, skill_id, last_error)
+                return {"id": agent["id"], "name": agent["name"], "status": "failed", "error": str(last_error or "ModelUnavailable"), "attempts": 3}
 
-            subagent_results = await asyncio.gather(*(run_subagent(agent) for agent in subagents))
+            subagent_results = []
+            for agent in subagents:
+                subagent_results.append(await run_subagent(agent))
             completed = [item for item in subagent_results if item["status"] == "completed"]
             if not completed:
                 # Do not discard a valid skill-package result just because every
