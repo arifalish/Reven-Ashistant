@@ -69,9 +69,9 @@ SUBAGENT_REGISTRY: Dict[str, List[Dict[str, str]]] = {
         {"id":"sentiment_news_analyst","name":"Sentiment & News Analyst","task":"Analyze supplied macro/company news and sentiment; clearly flag when current news sources are unavailable."},
     ],
     "replica-skill": [
-        {"id":"requirements_architect","name":"Requirements & Architecture Analyst","task":"Extract requirements, propose architecture, interfaces and acceptance criteria."},
-        {"id":"implementation_engineer","name":"Implementation Engineer","task":"Produce concrete implementation/code changes or patch guidance appropriate to available repository tools."},
-        {"id":"test_engineer","name":"Test Engineer","task":"Create tests, edge cases and reproducible validation steps; never claim tests ran without evidence."},
+        {"id":"persona_tone_profiler","name":"Persona & Tone Profiler","task":"Profile supplied examples for voice, tone, audience and recurring stylistic traits without inventing personal facts."},
+        {"id":"style_consistency_enforcer","name":"Style Consistency Enforcer","task":"Apply the defined voice consistently across outputs and flag conflicting style choices."},
+        {"id":"context_memory_sync","name":"Context Memory Sync","task":"Summarize relevant supplied context for reuse and distinguish saved facts from assumptions."},
     ],
     "arena-skill": [
         {"id":"multi_model_evaluator","name":"Multi-Model Evaluator","task":"Compare alternative solution approaches. Do not claim GPT/Claude/Gemini/Llama were called unless actual configured connectors were used."},
@@ -277,21 +277,19 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 if not city or not category:
                     return skill_id, "Scraper not run: city or business category could not be reliably extracted. Please include both."
                 csv_result = await MapsScraperWorker().scrape_leads(city, category)
+                specialist_results = await execute_specialists(str(csv_result))
+                completed = sum(item["status"] == "completed" for item in specialist_results)
                 return skill_id, {
-                    "status": "completed",
+                    "status": "completed" if completed else "failed",
                     "output": f"Target: {category} in {city}\\n{csv_result}",
-                    "subagents": [{
-                        "id": "data_extraction_agent", "name": "Data Extraction Agent",
-                        "status": "completed", "output": str(csv_result)[:8000]
-                    }],
-                    "subagent_count": 1,
-                    "subagents_completed": 1,
-                    "note": "Location parser and deduplicator roles are implemented in the normal model-backed pipeline when scraper inputs are ambiguous; the connected scraper output is the extraction artifact."
+                    "subagents": specialist_results,
+                    "subagent_count": len(specialist_results),
+                    "subagents_completed": completed,
                 }
 
             if skill_id == "browser-agent-skill":
-                if not os.getenv("OPENAI_API_KEY"):
-                    return skill_id, "Browser execution unavailable: set OPENAI_API_KEY for browser-use's vision model. No website was opened."
+                if not (os.getenv("NVIDIA_API_KEY") or os.getenv("NVIDIA_API_KEYS")):
+                    return skill_id, {"status": "failed", "error": "NVIDIA_API_KEY is not configured; browser task was not run.", "subagents": []}
                 from skills.browser_agent import run_browser_task
                 browser_task = (
                     f"Research this request using read-only browser actions where possible: {query}. "
@@ -302,16 +300,14 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                     run_browser_task.invoke,
                     {"task": browser_task, "context": worker_context, "headless": True},
                 )
+                specialist_results = await execute_specialists(str(browser_result))
+                completed = sum(item["status"] == "completed" for item in specialist_results)
                 return skill_id, {
-                    "status": "completed",
+                    "status": "completed" if completed else "failed",
                     "output": str(browser_result),
-                    "subagents": [{
-                        "id": "action_executor", "name": "Action Executor",
-                        "status": "completed", "output": str(browser_result)[:8000]
-                    }],
-                    "subagent_count": 1,
-                    "subagents_completed": 1,
-                    "note": "Browser tool performed the action; DOM, visual and session checks are delegated through the specialist pipeline when evidence is available."
+                    "subagents": specialist_results,
+                    "subagent_count": len(specialist_results),
+                    "subagents_completed": completed,
                 }
 
             # Run every registered sub-agent as a real, bounded model-backed worker.
