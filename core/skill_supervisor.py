@@ -377,13 +377,30 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 subagent_results.append(await run_subagent(agent))
             completed = [item for item in subagent_results if item["status"] == "completed"]
             if not completed:
-                # Do not discard a valid skill-package result just because every
-                # optional specialist call hit a temporary provider failure.
-                if base_artifact and base_artifact.strip():
+                # First preserve a valid package artifact. If the package and all
+                # specialists failed, make one bounded recovery attempt for a useful
+                # deliverable rather than returning only a generic "all agents failed".
+                recovery_artifact = base_artifact.strip() if base_artifact and base_artifact.strip() else ""
+                recovery_warning = "Specialist agents were unavailable; returned the base skill result."
+                if not recovery_artifact:
+                    recovery_prompt = (
+                        f"You are the recovery worker for {skill_id}. Produce the most useful concrete deliverable possible.\\n"
+                        f"User request: {query}\\nSkill responsibility: {meta['description']}\\n"
+                        f"Context: {json.dumps(worker_context, ensure_ascii=False, default=str)[:5000]}\\n"
+                        "Do the requested content work directly. Do not claim video rendering, uploads, browsing, or other external actions unless a connected tool confirms them. "
+                        "If an external action is unavailable, deliver the complete prepared artifact and list the exact missing integration."
+                    )
+                    try:
+                        recovery_artifact = (await asyncio.wait_for(router.generate_tier3(recovery_prompt), timeout=90)).strip()
+                        if recovery_artifact:
+                            recovery_warning = "Recovered via one consolidated worker; individual specialist calls were unavailable."
+                    except Exception as exc:
+                        logger.warning("Consolidated recovery failed for %s: %s", skill_id, type(exc).__name__)
+                if recovery_artifact:
                     return skill_id, {
                         "status": "completed",
-                        "output": base_artifact.strip(),
-                        "warning": "Specialist agents were unavailable; returned the base skill result.",
+                        "output": recovery_artifact,
+                        "warning": recovery_warning,
                         "subagents": subagent_results,
                         "subagent_count": len(subagents),
                         "subagents_completed": 0,
@@ -391,7 +408,7 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 failure_types = sorted({str(item.get("error", "UnknownError")) for item in subagent_results})
                 return skill_id, {
                     "status": "failed",
-                    "error": "AI provider unavailable after retry (" + ", ".join(failure_types) + "). Check NVIDIA/OpenRouter/Cloudflare provider connectivity and quotas.",
+                    "error": "AI provider unavailable after specialist retries and consolidated recovery (" + ", ".join(failure_types) + "). Check provider connectivity/quotas.",
                     "subagents": subagent_results,
                     "subagent_count": len(subagents),
                     "subagents_completed": 0,
