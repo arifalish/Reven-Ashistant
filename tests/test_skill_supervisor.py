@@ -66,7 +66,9 @@ async def test_execute_plan_records_failures_without_losing_other_artifacts(monk
         ["youtube-agent-skill", "instagram-agent-skill"],
     )
     assert result["skills"]["instagram-agent-skill"]["status"] == "completed"
-    assert result["skills"]["youtube-agent-skill"]["status"] == "failed"
+    assert result["skills"]["youtube-agent-skill"]["status"] == "completed"
+    assert result["skills"]["youtube-agent-skill"]["warning"] == "Base skill package unavailable: RuntimeError"
+    assert result["skills"]["youtube-agent-skill"]["subagents_completed"] > 0
     assert len(result["execution_waves"]) == 1
 
 
