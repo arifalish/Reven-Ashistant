@@ -27,6 +27,7 @@ FALLBACK_MODELS = (
 )
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_FREE_MODEL = "openrouter/free"
+CLOUDFLARE_DEFAULT_MODEL = "@cf/zai-org/glm-4.7-flash"
 TRANSIENT_ERRORS = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
 
 
@@ -101,6 +102,27 @@ class LLMRouter:
         self._key_index = 0
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._cache_seconds = 300
+
+    def _cloudflare_credentials(self) -> tuple[str, str]:
+        account_id = _configured_value("CLOUDFLARE_ACCOUNT_ID", getattr(settings, "CLOUDFLARE_ACCOUNT_ID", ""))
+        token = _configured_value("CLOUDFLARE_API_TOKEN", getattr(settings, "CLOUDFLARE_API_TOKEN", ""))
+        return account_id, token
+
+    async def _try_cloudflare(self, prompt: str) -> str:
+        """Use Cloudflare Workers AI through its OpenAI-compatible API."""
+        account_id, token = self._cloudflare_credentials()
+        if not account_id or not token:
+            raise RuntimeError("CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN is not configured.")
+        if any(value.lower().startswith(("mock-", "test-", "mock_", "test_")) for value in (account_id, token)):
+            raise RuntimeError("Cloudflare Workers AI credentials are test/mock values.")
+        model = _configured_value("CLOUDFLARE_AI_MODEL", getattr(settings, "CLOUDFLARE_AI_MODEL", "")) or CLOUDFLARE_DEFAULT_MODEL
+        client = AsyncOpenAI(
+            api_key=token,
+            base_url=f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+            timeout=45.0,
+            max_retries=0,
+        )
+        return await self._call_model(client, model, prompt)
 
     def _base_url(self) -> str:
         gateway = _configured_value("CF_GATEWAY_URL", settings.CF_GATEWAY_URL).rstrip("/")
@@ -193,13 +215,18 @@ class LLMRouter:
         raise RuntimeError("No usable NVIDIA model or API key was available.")
 
     async def _generate(self, prompt: str, tier: str) -> str:
-        """Try OpenRouter free models first, then configured NVIDIA models."""
+        """Try free OpenRouter and Cloudflare Workers AI before NVIDIA fallback."""
         errors: list[str] = []
         if _openrouter_key():
             try:
                 return await self._try_openrouter(prompt)
             except Exception as exc:
                 errors.append(f"OpenRouter free router: {exc}")
+        if self._cloudflare_credentials() != ("", ""):
+            try:
+                return await self._try_cloudflare(prompt)
+            except Exception as exc:
+                errors.append(f"Cloudflare Workers AI: {exc}")
         try:
             return await self._generate_nvidia(prompt)
         except Exception as exc:
