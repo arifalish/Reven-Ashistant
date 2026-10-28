@@ -5,6 +5,7 @@ from core.skill_supervisor import (
     _parse_plan,
     _ready_waves,
     deterministic_skill_plan,
+    SUBAGENT_REGISTRY,
 )
 
 
@@ -67,3 +68,23 @@ async def test_execute_plan_records_failures_without_losing_other_artifacts(monk
     assert result["skills"]["instagram-agent-skill"]["status"] == "completed"
     assert result["skills"]["youtube-agent-skill"]["status"] == "failed"
     assert len(result["execution_waves"]) == 1
+
+
+
+def test_all_fifteen_skills_have_registered_subagents():
+    assert set(SUBAGENT_REGISTRY) == set(SKILL_REGISTRY)
+    assert all(3 <= len(agents) <= 4 for agents in SUBAGENT_REGISTRY.values())
+    assert sum(len(agents) for agents in SUBAGENT_REGISTRY.values()) == 52
+
+
+def test_subagent_registry_contains_expected_specialist_roles():
+    names = {
+        agent["name"]
+        for agents in SUBAGENT_REGISTRY.values()
+        for agent in agents
+    }
+    assert "Visual Content Analyst" in names
+    assert "Risk & Capital Manager" in names
+    assert "Schema & Technical Validator" in names
+    assert "Intent Classifier & Router" in names
+    assert "Session & Cookie Manager" in names

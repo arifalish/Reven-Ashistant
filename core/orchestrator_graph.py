@@ -41,9 +41,16 @@ async def node_supervisor(state: BlackboardState) -> Dict:
         prompt = f"Answer the following query clearly and concisely:\n{state.raw_thought}"
         general_response = await router.generate_tier1(prompt)
     else:
-        # Otherwise generate a master strategy to feed the agents
-        strategy_prompt = f"Analyze business thought: {state.raw_thought}. Provide a brief master strategy for the agents."
-        strategy = await router.generate_tier1(strategy_prompt)
+        # Avoid a second blocking LLM round-trip before any worker can start.
+        # The skill planner already selected the relevant specialists; pass a
+        # deterministic mission brief as shared context instead.
+        skill_names = ", ".join(selected_skills) or "general-purpose worker"
+        strategy = (
+            f"Mission: {state.raw_thought.strip()}\n"
+            f"Selected specialists: {skill_names}\n"
+            "Execute only the assigned scope, share evidence through the blackboard, "
+            "and report blockers instead of claiming unverified external actions."
+        )
         state.founder_strategy = {"summary": strategy}
 
     return {

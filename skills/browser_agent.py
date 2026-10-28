@@ -5,6 +5,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from browser_use import Agent, BrowserProfile, BrowserSession
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,13 @@ def run_browser_task(task: str, context: Optional[Dict[str, Any]] = None, headle
         browser = BrowserSession(profile=profile)
 
         # Initialize LLM model - we default to standard OpenAI chat but can be customized
-        llm = ChatOpenAI(model="gpt-4o") # Using 4o since browser-use works best with vision-capable models
+        llm = ChatOpenAI(
+            model=os.getenv("NVIDIA_BROWSER_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"),
+            api_key=os.getenv("NVIDIA_API_KEY") or os.getenv("NVIDIA_API_KEYS", "").split(",")[0],
+            base_url=os.getenv("NVIDIA_API_BASE", "https://integrate.api.nvidia.com/v1"),
+            timeout=30,
+            max_retries=0,
+        )
 
         # Build task string including context if provided
         full_task = task
