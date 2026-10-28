@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 import os
 import time
 from itertools import count
@@ -18,13 +19,35 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from core.config import settings
 
+logger = logging.getLogger(__name__)
+
+# Prefer chat-capable NVIDIA-hosted models in a deliberate order, then append
+# additional chat models discovered from the live /models endpoint.
 FALLBACK_MODELS = (
-    "nvidia/deepseek-v4.1-flash",
+    "moonshotai/kimi-k3",
+    "moonshotai/kimi-k2-instruct",
+    "moonshotai/kimi-k2-thinking",
+    "deepseek-ai/deepseek-v4-flash",
     "deepseek-ai/deepseek-v4-flash-0731",
-    "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "deepseek-ai/deepseek-v4-pro",
+    "z-ai/glm-5.3-flash",
+    "z-ai/glm-5.3",
+    "z-ai/glm-5.2",
     "qwen/qwen3-next-80b-a3b-instruct",
+    "qwen/qwen3-next-80b-a3b-thinking",
+    "qwen/qwq-32b",
+    "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "nvidia/nemotron-3-nano-30b-a3b",
+    "meta/llama-3.3-70b-instruct",
     "meta/llama-3.1-8b-instruct",
+    "openai/gpt-oss-20b",
+    "stepfun-ai/step-3.5-flash",
 )
+NON_CHAT_MODEL_MARKERS = (
+    "embed", "rerank", "gliner", "safety", "guard", "detect", "classify",
+    "image", "video", "audio", "speech", "translate", "pii",
+)
+MODEL_COOLDOWN_SECONDS = {402: 900, 429: 90, 500: 30, 502: 30, 503: 45, 504: 30}
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_FREE_MODEL = "openrouter/free"
 CLOUDFLARE_DEFAULT_MODEL = "@cf/zai-org/glm-4.7-flash"
@@ -101,6 +124,7 @@ class LLMRouter:
         self._task_lock = asyncio.Lock()
         self._key_index = 0
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
+        self._model_cooldowns: dict[tuple[str, str], float] = {}
         self._cache_seconds = 300
 
     def _cloudflare_credentials(self) -> tuple[str, str]:
@@ -144,11 +168,16 @@ class LLMRouter:
             return cached[1]
         try:
             response = await client.models.list()
-            discovered = [item.id for item in response.data if getattr(item, "id", None)]
+            discovered = [
+                item.id for item in response.data
+                if getattr(item, "id", None)
+                and not any(marker in item.id.lower() for marker in NON_CHAT_MODEL_MARKERS)
+            ]
             ordered = [model for model in FALLBACK_MODELS if model in discovered]
             ordered += [model for model in discovered if model not in ordered]
             models = ordered or list(FALLBACK_MODELS)
-        except Exception:
+        except Exception as exc:
+            logger.warning("NVIDIA model discovery failed; using configured fallback list: %s", type(exc).__name__)
             models = list(FALLBACK_MODELS)
         self._model_cache[cache_key] = (now, models)
         return models
@@ -191,28 +220,54 @@ class LLMRouter:
         last_error: Optional[Exception] = None
         attempted: set[tuple[str, str]] = set()
         for client in clients:
-            cache_key = str(client.base_url) + ":" + hashlib.sha256((client.api_key or "").encode()).hexdigest()[:12]
+            key_fingerprint = hashlib.sha256((client.api_key or "").encode()).hexdigest()[:12]
+            cache_key = str(client.base_url) + ":" + key_fingerprint
             models = await self._available_models(client, cache_key)
+            key_auth_failed = False
             for model in models:
-                marker = (client.api_key or "", model)
+                marker = (key_fingerprint, model)
                 if marker in attempted:
                     continue
                 attempted.add(marker)
+                if self._model_cooldowns.get(marker, 0.0) > time.monotonic():
+                    logger.debug("Skipping NVIDIA model %s during cooldown", model)
+                    continue
                 try:
-                    return await self._call_model(client, model, prompt)
+                    answer = await self._call_model(client, model, prompt)
+                    self._model_cooldowns.pop(marker, None)
+                    logger.info("LLM request succeeded with NVIDIA model %s", model)
+                    return answer
                 except APIStatusError as exc:
                     last_error = exc
-                    if exc.status in (400, 401, 403, 404, 410, 429) or exc.status >= 500:
-                        if exc.status in (401, 403):
-                            break
+                    status = exc.status
+                    if status in (401, 403):
+                        key_auth_failed = True
+                        logger.warning("NVIDIA key rejected (HTTP %s); moving to next key", status)
+                        break
+                    if status in MODEL_COOLDOWN_SECONDS:
+                        self._model_cooldowns[marker] = time.monotonic() + MODEL_COOLDOWN_SECONDS[status]
+                        logger.info("Cooling down NVIDIA model %s after HTTP %s", model, status)
                         continue
-                    raise
+                    if status in (400, 404, 405, 410, 422):
+                        logger.debug("Skipping incompatible NVIDIA model %s (HTTP %s)", model, status)
+                        continue
+                    if 400 <= status < 500:
+                        raise
+                    continue
                 except TRANSIENT_ERRORS as exc:
                     last_error = exc
+                    self._model_cooldowns[marker] = time.monotonic() + 30
+                    logger.info("Cooling down NVIDIA model %s after transient transport error", model)
                     continue
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning("Unexpected error from NVIDIA model %s: %s", model, type(exc).__name__)
+                    continue
+            if key_auth_failed:
+                continue
         if last_error:
-            raise RuntimeError(f"All configured NVIDIA models/keys failed: {last_error}") from last_error
-        raise RuntimeError("No usable NVIDIA model or API key was available.")
+            raise RuntimeError(f"All configured NVIDIA models/keys failed; last error type: {type(last_error).__name__}") from last_error
+        raise RuntimeError("No NVIDIA model is currently available (all candidates may be in cooldown).")
 
     async def _generate(self, prompt: str, tier: str) -> str:
         """Try free OpenRouter and Cloudflare Workers AI before NVIDIA fallback."""
