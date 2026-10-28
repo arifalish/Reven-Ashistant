@@ -30,6 +30,94 @@ SKILL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "opendots-coworker-skill": {"department": "workspace", "description": "Break long-running workspace tasks into operational steps and use configured coworker tools.", "keywords": r"autonomous|coworker|long.running|shell|docker|workspace"},
 }
 
+# Each sub-agent is an independently executed LLM worker with a defined responsibility.
+# External actions (posting, sending messages, scraping, trading, logging in) still require
+# an explicitly configured connector and are never claimed without execution evidence.
+SUBAGENT_REGISTRY: Dict[str, List[Dict[str, str]]] = {
+    "instagram-agent-skill": [
+        {"id":"visual_content_analyst","name":"Visual Content Analyst","task":"Plan/analyze carousel, Reels and post aesthetics, format, visual hierarchy and template brief."},
+        {"id":"caption_hook_writer","name":"Caption & Hook Writer","task":"Write high-engagement hooks, captions, CTA and niche-relevant hashtag suggestions."},
+        {"id":"dm_comment_responder","name":"DM & Comment Responder","task":"Draft helpful replies to likely user DMs/comments; do not send them without an authorized messaging connector."},
+        {"id":"growth_analytics_monitor","name":"Growth & Analytics Monitor","task":"Define reach, impressions, shares, retention/drop-off metrics and experiments; never invent live analytics."},
+    ],
+    "youtube-agent-skill": [
+        {"id":"idea_trend_scout","name":"Idea & Trend Scout","task":"Identify topic angles, audience intent, competitor-format hypotheses and keywords; label live trend data unavailable unless sourced."},
+        {"id":"script_architect","name":"Script Architect","task":"Create retention-aware long-form script or Shorts structure with hook, beats and CTA."},
+        {"id":"thumbnail_title_optimizer","name":"Thumbnail & Title Optimizer","task":"Generate title variants and a specific thumbnail design brief, optimized as hypotheses not guaranteed CTR."},
+        {"id":"seo_metadata_specialist","name":"SEO & Metadata Specialist","task":"Draft description, chapters/timestamps, tags and playlist recommendations."},
+    ],
+    "linkedin-agent-skill": [
+        {"id":"thought_leadership_drafter","name":"Thought Leadership Drafter","task":"Turn supplied insights into a professional post, case study or founder story."},
+        {"id":"network_engagement_bot","name":"Network Engagement Bot","task":"Draft relevant, substantive comments; never claim to have visited or commented on posts without browser evidence."},
+        {"id":"inmail_outreach_specialist","name":"InMail & Outreach Specialist","task":"Write personalized connection requests and B2B follow-ups using only provided or verified prospect context."},
+    ],
+    "x-agent-skill": [
+        {"id":"thread_architect","name":"Thread Architect","task":"Split the idea into a compelling, coherent X thread with a strong opening and conclusion."},
+        {"id":"realtime_trend_monitor","name":"Real-Time Trend Monitor","task":"Identify what current data would be needed for trend validation; do not invent live trends or quote-tweets."},
+        {"id":"community_manager","name":"Community Manager","task":"Draft replies and triage mentions by relevance, risk and response priority; do not publish without authorization."},
+    ],
+    "founder-skill": [
+        {"id":"strategy_vision_planner","name":"Strategy & Vision Planner","task":"Validate the business model, roadmap, risks and quarterly OKRs."},
+        {"id":"pitch_deck_investor","name":"Pitch Deck & Investor Agent","task":"Draft pitch narrative, executive summary and clearly labelled financial assumptions/projections."},
+        {"id":"decision_simulator","name":"Decision Simulator","task":"Compare options, trade-offs, hiring choices and resource allocation scenarios."},
+        {"id":"operations_orchestrator","name":"Operations Orchestrator","task":"Prioritize daily/weekly tasks, owners, dependencies and cross-functional workflow."},
+    ],
+    "trader-skill": [
+        {"id":"market_data_fetcher","name":"Market Data Fetcher","task":"Identify required price candles and calculate/interpret RSI, MACD and volume only from supplied or connected data."},
+        {"id":"risk_capital_manager","name":"Risk & Capital Manager","task":"Calculate position sizing and stop-loss/risk-reward scenarios from explicit capital and risk inputs; no trade execution."},
+        {"id":"backtesting_engine","name":"Backtesting Engine","task":"Specify or run backtest logic only where historical data and an execution environment are available; report assumptions and limitations."},
+        {"id":"sentiment_news_analyst","name":"Sentiment & News Analyst","task":"Analyze supplied macro/company news and sentiment; clearly flag when current news sources are unavailable."},
+    ],
+    "replica-skill": [
+        {"id":"requirements_architect","name":"Requirements & Architecture Analyst","task":"Extract requirements, propose architecture, interfaces and acceptance criteria."},
+        {"id":"implementation_engineer","name":"Implementation Engineer","task":"Produce concrete implementation/code changes or patch guidance appropriate to available repository tools."},
+        {"id":"test_engineer","name":"Test Engineer","task":"Create tests, edge cases and reproducible validation steps; never claim tests ran without evidence."},
+    ],
+    "arena-skill": [
+        {"id":"multi_model_evaluator","name":"Multi-Model Evaluator","task":"Compare alternative solution approaches. Do not claim GPT/Claude/Gemini/Llama were called unless actual configured connectors were used."},
+        {"id":"blind_judge","name":"Blind Judge Agent","task":"Score anonymized candidate outputs on correctness, clarity, logic, completeness and formatting."},
+        {"id":"consensus_aggregator","name":"Consensus Aggregator","task":"Synthesize the strongest supported parts and explicitly preserve disagreements/uncertainty."},
+    ],
+    "master-skills": [
+        {"id":"intent_classifier_router","name":"Intent Classifier & Router","task":"Classify the user intent and map it to registered skills and dependencies."},
+        {"id":"workflow_orchestrator","name":"Workflow Orchestrator","task":"Plan multi-step workflow, dependencies, parallelizable stages and completion checks."},
+        {"id":"quality_error_checker","name":"Quality & Error Checker","task":"Check output against the request, flag unsupported claims and suggest bounded retries."},
+    ],
+    "google-maps-scraper-kit": [
+        {"id":"location_query_parser","name":"Location & Query Parser","task":"Extract business niche, city/area, radius and filters; ask for missing essential location/category."},
+        {"id":"data_extraction_agent","name":"Data Extraction Agent","task":"Normalize business records from connected scraper results only; do not fabricate businesses or contact details."},
+        {"id":"cleaner_deduplicator","name":"Cleaner & Deduplicator","task":"Deduplicate and normalize records, validate fields and prepare CSV/JSON/CRM-ready output."},
+    ],
+    "sales-desk-skill": [
+        {"id":"lead_qualifier_bant","name":"Lead Qualifier (BANT)","task":"Assess budget, authority, need and timeline from available evidence; mark unknown fields unknown."},
+        {"id":"cold_email_personalizer","name":"Cold Email Personalizer","task":"Draft prospect-specific emails using verified company/profile facts and cite personalization evidence."},
+        {"id":"objection_handling_bot","name":"Objection Handling Bot","task":"Prepare honest responses to pricing, timing, competitor and trust objections."},
+        {"id":"deal_followup_tracker","name":"Deal Closer & Follow-Up Tracker","task":"Propose pipeline stage, next action and follow-up schedule; do not claim reminders were scheduled unless a tool confirms it."},
+    ],
+    "humanizer-core-skill": [
+        {"id":"cadence_tuner","name":"Perplexity & Burstiness Tuner","task":"Vary sentence cadence and vocabulary naturally while preserving meaning and factual content."},
+        {"id":"cliche_remover","name":"Cliché Remover","task":"Remove generic clichés, repetitive transitions and robotic phrasing without altering facts."},
+        {"id":"quality_verifier","name":"Quality Verification Agent","task":"Check clarity, fidelity, grammar and tone; do not promise detector bypass or claim an external detector score without a real tool."},
+    ],
+    "seo-agent-skill": [
+        {"id":"keyword_serp_analyzer","name":"Keyword & SERP Analyzer","task":"Map search intent and keyword clusters; distinguish hypotheses from live volume/difficulty data."},
+        {"id":"onpage_optimizer","name":"On-Page Optimization Agent","task":"Recommend H1/H2/H3, URL, alt text, internal links and title/meta changes."},
+        {"id":"content_gap_identifier","name":"Content Gap Identifier","task":"Identify likely missing sections and compare against supplied competitor/ranking content only."},
+        {"id":"schema_technical_validator","name":"Schema & Technical Validator","task":"Draft appropriate JSON-LD schema and technical validation checklist."},
+    ],
+    "browser-agent-skill": [
+        {"id":"dom_element_finder","name":"DOM & Element Finder","task":"Identify target page elements/selectors from browser/DOM evidence or propose robust locator strategy."},
+        {"id":"action_executor","name":"Action Executor","task":"Prepare or execute only actions supported by configured browser tools; seek approval for irreversible actions."},
+        {"id":"visual_verifier","name":"Visual Verification Agent","task":"Verify page state using actual screenshot/tool evidence; otherwise return verification steps."},
+        {"id":"session_cookie_manager","name":"Session & Cookie Manager","task":"Diagnose login/session state using authorized tools; never bypass access controls or anti-bot protections."},
+    ],
+    "opendots-coworker-skill": [
+        {"id":"meeting_note_synthesizer","name":"Meeting & Note Synthesizer","task":"Summarize supplied transcripts/chats and extract decisions, owners and action items."},
+        {"id":"workspace_document_drafter","name":"Workspace Document Drafter","task":"Draft SOPs, internal memos and project briefs based on available context."},
+        {"id":"task_tracking_agent","name":"Task Tracking Agent","task":"Track deliverables, blockers and follow-up recommendations; only create reminders through a configured tool."},
+    ],
+}
+
 # A dependency edge means the prerequisite must finish before the dependent skill starts.
 DEPENDENCIES = {
     "browser-agent-skill": {"google-maps-scraper-kit"},
@@ -191,8 +279,53 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 )
                 return skill_id, str(browser_result)
 
-            result = await skill_registry.execute_skill(skill_id, task, context=worker_context)
-            return skill_id, result
+            # Run every registered sub-agent as a real, bounded model-backed worker.
+            # Individual outputs are kept as blackboard artifacts and then synthesized.
+            subagents = SUBAGENT_REGISTRY.get(skill_id, [])
+            if not subagents:
+                result = await skill_registry.execute_skill(skill_id, task, context=worker_context)
+                return skill_id, {"status": "completed", "output": result, "subagents": []}
+
+            semaphore = asyncio.Semaphore(4)
+            async def run_subagent(agent: Dict[str, str]) -> Dict[str, Any]:
+                prompt = (
+                    f"You are the {agent['name']} sub-agent for skill {skill_id}.\\n"
+                    f"Specialized responsibility: {agent['task']}\\n"
+                    f"Original user request: {query}\\n"
+                    f"Skill mission: {task}\\n"
+                    f"Context and shared blackboard: {json.dumps(worker_context, ensure_ascii=False, default=str)[:9000]}\\n"
+                    "Return a concrete artifact for your role. State missing data and tool limitations. "
+                    "Never invent live metrics, scraped records, completed actions or sources."
+                )
+                async with semaphore:
+                    try:
+                        output = await asyncio.wait_for(router.generate_tier3(prompt), timeout=75)
+                        return {"id": agent["id"], "name": agent["name"], "status": "completed", "output": output}
+                    except Exception as exc:
+                        return {"id": agent["id"], "name": agent["name"], "status": "failed", "error": type(exc).__name__}
+
+            subagent_results = await asyncio.gather(*(run_subagent(agent) for agent in subagents))
+            completed = [item for item in subagent_results if item["status"] == "completed"]
+            if not completed:
+                return skill_id, {"status": "failed", "error": "All registered sub-agents failed", "subagents": subagent_results}
+            synthesis_prompt = (
+                f"Synthesize these specialist outputs for skill {skill_id}.\\n"
+                f"Original request: {query}\\n"
+                "Combine complementary findings, resolve contradictions cautiously, preserve useful details, "
+                "and explicitly state missing inputs. Do not imply failed sub-agents succeeded.\\n"
+                f"Sub-agent artifacts: {json.dumps(completed, ensure_ascii=False, default=str)[:18000]}"
+            )
+            try:
+                synthesized = await asyncio.wait_for(router.generate_tier3(synthesis_prompt), timeout=75)
+            except Exception:
+                synthesized = "\\n\\n".join(f"### {item['name']}\\n{item['output']}" for item in completed)
+            return skill_id, {
+                "status": "completed",
+                "output": synthesized,
+                "subagents": subagent_results,
+                "subagent_count": len(subagents),
+                "subagents_completed": len(completed),
+            }
 
         results = await asyncio.gather(*(run_one(skill_id) for skill_id in wave), return_exceptions=True)
         for skill_id, result in zip(wave, results):
