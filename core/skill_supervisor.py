@@ -337,23 +337,32 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                     return skill_id, {"status": "completed", "output": base_artifact, "subagents": []}
                 return skill_id, {"status": "failed", "error": base_error or "No skill implementation or specialists registered", "subagents": []}
 
-            semaphore = asyncio.Semaphore(4)
+            # NVIDIA/free-provider endpoints can transiently fail under fan-out. Keep
+            # concurrency bounded and retry each worker once before marking it failed.
+            semaphore = asyncio.Semaphore(2)
             async def run_subagent(agent: Dict[str, str]) -> Dict[str, Any]:
                 prompt = (
                     f"You are the {agent['name']} sub-agent for skill {skill_id}.\\n"
                     f"Specialized responsibility: {agent['task']}\\n"
                     f"Original user request: {query}\\n"
                     f"Skill mission: {task}\\n"
-                    f"Context and shared blackboard: {json.dumps(worker_context, ensure_ascii=False, default=str)[:9000]}\\n"
-                    "Return a concrete artifact for your role. State missing data and tool limitations. "
+                    f"Context and shared blackboard: {json.dumps(worker_context, ensure_ascii=False, default=str)[:6000]}\\n"
+                    "Return a concrete artifact for your role in a concise format. State missing data and tool limitations. "
                     "Never invent live metrics, scraped records, completed actions or sources."
                 )
+                last_error = None
                 async with semaphore:
-                    try:
-                        output = await asyncio.wait_for(router.generate_tier3(prompt), timeout=75)
-                        return {"id": agent["id"], "name": agent["name"], "status": "completed", "output": output}
-                    except Exception as exc:
-                        return {"id": agent["id"], "name": agent["name"], "status": "failed", "error": type(exc).__name__}
+                    for attempt in range(2):
+                        try:
+                            if attempt:
+                                await asyncio.sleep(0.5)
+                            output = await asyncio.wait_for(router.generate_tier3(prompt), timeout=60)
+                            if output and output.strip():
+                                return {"id": agent["id"], "name": agent["name"], "status": "completed", "output": output.strip()}
+                            last_error = "EmptyModelResponse"
+                        except Exception as exc:
+                            last_error = type(exc).__name__
+                return {"id": agent["id"], "name": agent["name"], "status": "failed", "error": str(last_error or "ModelUnavailable")}
 
             subagent_results = await asyncio.gather(*(run_subagent(agent) for agent in subagents))
             completed = [item for item in subagent_results if item["status"] == "completed"]
