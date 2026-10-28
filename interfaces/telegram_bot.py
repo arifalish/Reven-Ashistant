@@ -18,8 +18,7 @@ class TelegramBot:
 
         payload = {
             "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown"
+            "text": text
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
@@ -45,8 +44,7 @@ class TelegramBot:
         payload = {
             "chat_id": chat_id,
             "message_id": message_id,
-            "text": f"🚀 **Live Mission Control Dashboard**\n\n{status_text}",
-            "parse_mode": "Markdown"
+            "text": f"🚀 Reven Assistant\n\n{status_text}"
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
