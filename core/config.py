@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 class Settings(BaseSettings):
-    NVIDIA_API_KEY: str = "mock-nvidia-key"
+    OPENROUTER_API_KEY: str = ""\n    NVIDIA_API_KEY: str = "mock-nvidia-key"
     GROQ_API_KEY: str = "mock-groq-key"
     GEMINI_API_KEY: str = "mock-gemini-key"
 
