@@ -75,6 +75,11 @@ async def analyze_task_and_route(raw_thought: str) -> List[str]:
     deterministic = _deterministic_routes(text)
     if deterministic == ["general_chat"]:
         return deterministic
+    # High-confidence keyword routing is immediate; only fall back to an LLM when
+    # no specialist branch can be identified. This avoids an extra model round-trip
+    # for ordinary skill requests while preserving multi-branch deterministic routes.
+    if deterministic:
+        return deterministic
 
     prompt = f"""You are the centralized supervisor for a multi-agent assistant.
 Choose every team needed for the user's complete request. Return ONLY a JSON array
