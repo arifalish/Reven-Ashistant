@@ -161,7 +161,7 @@ class LLMRouter:
             keys = _current_api_keys()
             key = keys[self._key_index % len(keys)]
             self._key_index = (self._key_index + 1) % max(1, len(keys))
-        return key, AsyncOpenAI(api_key=key, base_url=self._base_url(), timeout=45.0, max_retries=0)
+        return key, AsyncOpenAI(api_key=key, base_url=self._base_url(), timeout=15.0, max_retries=0)
 
     async def _available_models(self, client: AsyncOpenAI, cache_key: str) -> list[str]:
         now = time.monotonic()
@@ -201,7 +201,7 @@ class LLMRouter:
         client = AsyncOpenAI(
             api_key=key,
             base_url=OPENROUTER_BASE_URL,
-            timeout=45.0,
+            timeout=15.0,
             max_retries=0,
             default_headers={
                 "HTTP-Referer": "https://github.com/arifalish/Reven-Ashistant",
@@ -217,7 +217,7 @@ class LLMRouter:
         start_index = (self._key_index - 1) % len(keys)
         for index, key in enumerate(keys):
             if index != start_index:
-                clients.append(AsyncOpenAI(api_key=key, base_url=self._base_url(), timeout=45.0, max_retries=0))
+                clients.append(AsyncOpenAI(api_key=key, base_url=self._base_url(), timeout=15.0, max_retries=0))
 
         last_error: Optional[Exception] = None
         attempted: set[tuple[str, str]] = set()
@@ -349,7 +349,7 @@ class LLMRouter:
                 if _mock_mode():
                     return f"[Mocked Tier 4 Response for tests] {prompt[:50]}..."
                 raise primary_error
-            client = AsyncOpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1", timeout=45.0, max_retries=0)
+            client = AsyncOpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1", timeout=15.0, max_retries=0)
             try:
                 return await self._call_model(client, "llama-3.3-70b-versatile", prompt)
             except Exception:
