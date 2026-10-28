@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import time
 from itertools import count
@@ -164,7 +165,7 @@ class LLMRouter:
         attempted: set[tuple[str, str]] = set()
         for client in clients:
             try:
-                models = await self._available_models(client, client.base_url)
+                cache_key = client.base_url + ":" + hashlib.sha256((client.api_key or "").encode()).hexdigest()[:12]\n                models = await self._available_models(client, cache_key)
             except Exception:
                 models = list(FALLBACK_MODELS)
             for model in models:
