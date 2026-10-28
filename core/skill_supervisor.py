@@ -310,6 +310,13 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                     "subagents_completed": completed,
                 }
 
+            # Execute the original skill package first, preserving its tools/workflow.
+            # Specialist agents then enrich that real skill artifact; package failures remain visible.
+            try:
+                base_artifact = await skill_registry.execute_skill(skill_id, task, context=worker_context)
+            except Exception as exc:
+                return skill_id, {"status": "failed", "error": f"Skill package execution failed: {type(exc).__name__}", "subagents": []}
+
             # Run every registered sub-agent as a real, bounded model-backed worker.
             # Individual outputs are kept as blackboard artifacts and then synthesized.
             subagents = SUBAGENT_REGISTRY.get(skill_id, [])
@@ -344,7 +351,7 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 f"Original request: {query}\\n"
                 "Combine complementary findings, resolve contradictions cautiously, preserve useful details, "
                 "and explicitly state missing inputs. Do not imply failed sub-agents succeeded.\\n"
-                f"Sub-agent artifacts: {json.dumps(completed, ensure_ascii=False, default=str)[:18000]}"
+                f"Original skill package artifact: {str(base_artifact)[:7000]}\\nSub-agent artifacts: {json.dumps(completed, ensure_ascii=False, default=str)[:18000]}"
             )
             try:
                 synthesized = await asyncio.wait_for(router.generate_tier3(synthesis_prompt), timeout=75)
