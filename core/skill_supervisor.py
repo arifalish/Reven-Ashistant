@@ -186,11 +186,12 @@ async def plan_skills(query: str) -> Dict[str, Any]:
     try:
         raw = await router.generate_tier1(prompt)
         model_selected = _parse_plan(raw)
-        # Merge model choices with high-confidence deterministic intents so an
-        # incomplete LLM plan cannot drop a clearly requested workstream.
-        selected = list(dict.fromkeys(fallback + model_selected))
+        # A confident deterministic match wins. Do not let a broad LLM plan
+        # silently add unrelated skills (e.g. Instagram + YouTube for one video).
+        # Use model routing only when deterministic routing found no specific skill.
+        selected = fallback if fallback != ["master-skills"] else (model_selected or fallback)
         selected = [skill for wave in _ready_waves(selected) for skill in wave]
-        return {"selected_skills": selected, "reasoning": "LLM plan validated and merged with deterministic intent signals."}
+        return {"selected_skills": selected, "reasoning": "Selected the smallest deterministic skill set matching the request."}
     except Exception:
         return {"selected_skills": fallback, "reasoning": "Deterministic intent plan used because the planning model was unavailable."}
 
