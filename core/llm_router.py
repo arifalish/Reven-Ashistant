@@ -127,7 +127,36 @@ class LLMRouter:
         self._key_index = 0
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._model_cooldowns: dict[tuple[str, str], float] = {}
+        self._preferred_models: dict[str, str] = {}
         self._cache_seconds = 300
+
+    async def _get_preferred_model(self, cache_key: str) -> str:
+        """Return the last successful model for this provider credential."""
+        preferred = self._preferred_models.get(cache_key, "")
+        if preferred:
+            return preferred
+        if redis_client:
+            try:
+                preferred = await redis_client.get("reven:llm:preferred:" + hashlib.sha256(cache_key.encode()).hexdigest()[:24])
+                if preferred:
+                    self._preferred_models[cache_key] = str(preferred)
+                    return str(preferred)
+            except Exception as exc:
+                logger.debug("Preferred model Redis read skipped: %s", type(exc).__name__)
+        return ""
+
+    async def _remember_preferred_model(self, cache_key: str, model: str) -> None:
+        """Remember a healthy model in memory and Redis when configured."""
+        self._preferred_models[cache_key] = model
+        if redis_client:
+            try:
+                await redis_client.set(
+                    "reven:llm:preferred:" + hashlib.sha256(cache_key.encode()).hexdigest()[:24],
+                    model,
+                    ex=60 * 60 * 24 * 30,
+                )
+            except Exception as exc:
+                logger.debug("Preferred model Redis write skipped: %s", type(exc).__name__)
 
     def _cloudflare_credentials(self) -> tuple[str, str]:
         account_id = _configured_value("CLOUDFLARE_ACCOUNT_ID", getattr(settings, "CLOUDFLARE_ACCOUNT_ID", ""))
@@ -225,6 +254,9 @@ class LLMRouter:
             key_fingerprint = hashlib.sha256((client.api_key or "").encode()).hexdigest()[:12]
             cache_key = str(client.base_url) + ":" + key_fingerprint
             models = await self._available_models(client, cache_key)
+            preferred = await self._get_preferred_model(cache_key)
+            if preferred and preferred in models:
+                models = [preferred] + [candidate for candidate in models if candidate != preferred]
             key_auth_failed = False
             # Bound provider failover latency: do not try an unbounded catalogue for every Telegram message.
             model_attempts = 0
@@ -243,7 +275,8 @@ class LLMRouter:
                 try:
                     answer = await self._call_model(client, model, prompt)
                     self._model_cooldowns.pop(marker, None)
-                    logger.info("LLM request succeeded with NVIDIA model %s", model)
+                    await self._remember_preferred_model(cache_key, model)
+                    logger.info("LLM request succeeded with NVIDIA model %s; saved as preferred", model)
                     return answer
                 except APIStatusError as exc:
                     last_error = exc
