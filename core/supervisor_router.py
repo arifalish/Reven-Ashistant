@@ -81,7 +81,7 @@ async def analyze_task_and_route(raw_thought: str) -> List[str]:
     if deterministic:
         return deterministic
 
-    # Skip the model round-trip for clear specialist intents; this keeps NVIDIA\n    # failover latency from blocking Telegram intent extraction.\n    if deterministic:\n        return deterministic\n\n    prompt = f"""You are the centralized supervisor for a multi-agent assistant.
+    prompt = f"""You are the centralized supervisor for a multi-agent assistant.
 Choose every team needed for the user's complete request. Return ONLY a JSON array
 using these exact node names:
 - branch_a_sales: B2B sales, lead generation, prospecting, outreach
