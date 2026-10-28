@@ -59,3 +59,21 @@ def test_cloudflare_workers_ai_uses_openai_compatible_endpoint():
 def test_provider_chain_includes_cloudflare_before_nvidia():
     source = inspect.getsource(llm_router.LLMRouter._generate)
     assert source.index("_try_openrouter") < source.index("_try_cloudflare") < source.index("_generate_nvidia")
+
+
+def test_nvidia_fallback_prioritizes_kimi_deepseek_glm_and_qwen():
+    models = llm_router.FALLBACK_MODELS
+    assert models[0] == "moonshotai/kimi-k3"
+    assert "deepseek-ai/deepseek-v4-flash" in models
+    assert "z-ai/glm-5.3-flash" in models
+    assert "qwen/qwen3-next-80b-a3b-instruct" in models
+
+
+def test_rate_limited_models_get_cooldown():
+    assert llm_router.MODEL_COOLDOWN_SECONDS[429] > 0
+    assert llm_router.MODEL_COOLDOWN_SECONDS[402] > llm_router.MODEL_COOLDOWN_SECONDS[429]
+
+
+def test_non_chat_models_are_filtered_from_discovery():
+    assert "embed" in llm_router.NON_CHAT_MODEL_MARKERS
+    assert "safety" in llm_router.NON_CHAT_MODEL_MARKERS
