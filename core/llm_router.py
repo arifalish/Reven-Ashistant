@@ -2,8 +2,8 @@ import asyncio
 import time
 from typing import Optional
 
-from tenacity import retry, stop_after_attempt, wait_exponential
-from openai import AsyncOpenAI
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from openai import AsyncOpenAI, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 from redis.asyncio import Redis
 
 from core.config import settings
@@ -86,14 +86,14 @@ class LLMRouter:
         )
         return response.choices[0].message.content or ""
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception_type((APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)))
     async def generate_tier1(self, prompt: str) -> str:
         """Master coordination, founder strategy and supervisor routing."""
         while not await check_rate_limit("tier1_rl", limit=50, window=60):
             await asyncio.sleep(1)
         try:
             return await self._call_model(
-                self.primary_client, "meta/llama-3.3-70b-instruct", prompt
+                self.primary_client, "deepseek-ai/deepseek-v4-flash", prompt
             )
         except Exception:
             if _mock_mode():
@@ -113,7 +113,7 @@ class LLMRouter:
             await asyncio.sleep(1)
         try:
             return await self._call_model(
-                self.primary_client, "qwen/qwen2.5-coder-32b-instruct", prompt
+                self.primary_client, "deepseek-ai/deepseek-v4-flash", prompt
             )
         except Exception:
             if _mock_mode():
@@ -130,7 +130,7 @@ class LLMRouter:
             await asyncio.sleep(1)
         try:
             return await self._call_model(
-                self.primary_client, "meta/llama-3.1-70b-instruct", prompt
+                self.primary_client, "deepseek-ai/deepseek-v4-flash", prompt
             )
         except Exception:
             if _mock_mode():
@@ -143,13 +143,13 @@ class LLMRouter:
                 return "Mock content draft for automated tests."
             raise
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5), retry=retry_if_exception_type((APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)))
     async def generate_tier4(self, prompt: str) -> str:
         """Bulk generation tier with Groq fallback."""
         if await check_rate_limit("tier4_rl", limit=200, window=60):
             try:
                 return await self._call_model(
-                    self.primary_client, "meta/llama-3.1-8b-instruct", prompt
+                    self.primary_client, "deepseek-ai/deepseek-v4-flash", prompt
                 )
             except Exception:
                 if _mock_mode():
