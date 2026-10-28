@@ -236,6 +236,21 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
             )
             worker_context = {**shared_context, "blackboard_artifacts": artifacts["skills"], "prior_artifacts_json": prior}
 
+            async def execute_specialists(evidence: str) -> List[Dict[str, Any]]:
+                roles = SUBAGENT_REGISTRY.get(skill_id, [])
+                async def run_role(agent: Dict[str, str]) -> Dict[str, Any]:
+                    prompt = (
+                        f"Role: {agent['name']}\\nResponsibility: {agent['task']}\\n"
+                        f"User request: {query}\\nTool evidence: {evidence[:7000]}\\n"
+                        "Return a concrete artifact; do not claim actions beyond the evidence."
+                    )
+                    try:
+                        output = await asyncio.wait_for(router.generate_tier3(prompt), timeout=75)
+                        return {"id": agent["id"], "name": agent["name"], "status": "completed", "output": output}
+                    except Exception as exc:
+                        return {"id": agent["id"], "name": agent["name"], "status": "failed", "error": type(exc).__name__}
+                return await asyncio.gather(*(run_role(role) for role in roles))
+
             if skill_id == "google-maps-scraper-kit":
                 from workers.maps_scraper_worker import MapsScraperWorker
                 target_prompt = (
