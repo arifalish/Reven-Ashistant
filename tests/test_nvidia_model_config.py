@@ -40,3 +40,22 @@ def test_mock_mode_requires_all_configured_test_keys(monkeypatch):
     assert llm_router._mock_mode() is True
     monkeypatch.setenv("NVIDIA_API_KEYS", "test-one,nvapi-real-key")
     assert llm_router._mock_mode() is False
+
+
+
+def test_cloudflare_workers_ai_config_is_read_from_environment(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "account-123")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token")
+    assert llm_router.LLMRouter()._cloudflare_credentials() == ("account-123", "cf-token")
+
+
+def test_cloudflare_workers_ai_uses_openai_compatible_endpoint():
+    assert llm_router.CLOUDFLARE_DEFAULT_MODEL == "@cf/zai-org/glm-4.7-flash"
+    source = inspect.getsource(llm_router.LLMRouter._try_cloudflare)
+    assert "/ai/v1" in source
+    assert "CLOUDFLARE_API_TOKEN" in source
+
+
+def test_provider_chain_includes_cloudflare_before_nvidia():
+    source = inspect.getsource(llm_router.LLMRouter._generate)
+    assert source.index("_try_openrouter") < source.index("_try_cloudflare") < source.index("_generate_nvidia")
