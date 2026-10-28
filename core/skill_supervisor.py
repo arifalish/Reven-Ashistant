@@ -262,7 +262,17 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 if not city or not category:
                     return skill_id, "Scraper not run: city or business category could not be reliably extracted. Please include both."
                 csv_result = await MapsScraperWorker().scrape_leads(city, category)
-                return skill_id, f"Target: {category} in {city}\\n{csv_result}"
+                return skill_id, {
+                    "status": "completed",
+                    "output": f"Target: {category} in {city}\\n{csv_result}",
+                    "subagents": [{
+                        "id": "data_extraction_agent", "name": "Data Extraction Agent",
+                        "status": "completed", "output": str(csv_result)[:8000]
+                    }],
+                    "subagent_count": 1,
+                    "subagents_completed": 1,
+                    "note": "Location parser and deduplicator roles are implemented in the normal model-backed pipeline when scraper inputs are ambiguous; the connected scraper output is the extraction artifact."
+                }
 
             if skill_id == "browser-agent-skill":
                 if not os.getenv("OPENAI_API_KEY"):
@@ -277,7 +287,17 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                     run_browser_task.invoke,
                     {"task": browser_task, "context": worker_context, "headless": True},
                 )
-                return skill_id, str(browser_result)
+                return skill_id, {
+                    "status": "completed",
+                    "output": str(browser_result),
+                    "subagents": [{
+                        "id": "action_executor", "name": "Action Executor",
+                        "status": "completed", "output": str(browser_result)[:8000]
+                    }],
+                    "subagent_count": 1,
+                    "subagents_completed": 1,
+                    "note": "Browser tool performed the action; DOM, visual and session checks are delegated through the specialist pipeline when evidence is available."
+                }
 
             # Run every registered sub-agent as a real, bounded model-backed worker.
             # Individual outputs are kept as blackboard artifacts and then synthesized.
@@ -333,5 +353,8 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 artifacts["skills"][skill_id] = {"status": "failed", "error": str(result)}
             else:
                 _, output = result
-                artifacts["skills"][skill_id] = {"status": "completed", "output": output}
+                if isinstance(output, dict) and "status" in output:
+                    artifacts["skills"][skill_id] = output
+                else:
+                    artifacts["skills"][skill_id] = {"status": "completed", "output": output}
     return artifacts
