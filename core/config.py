@@ -3,6 +3,9 @@ from typing import Optional
 
 class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
+    CLOUDFLARE_ACCOUNT_ID: str = ""
+    CLOUDFLARE_API_TOKEN: str = ""
+    CLOUDFLARE_AI_MODEL: str = "@cf/zai-org/glm-4.7-flash"
     NVIDIA_API_KEY: str = "mock-nvidia-key"
     GROQ_API_KEY: str = "mock-groq-key"
     GEMINI_API_KEY: str = "mock-gemini-key"
