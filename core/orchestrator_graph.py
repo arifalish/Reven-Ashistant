@@ -61,23 +61,101 @@ async def node_supervisor(state: BlackboardState) -> Dict:
         "founder_strategy": state.founder_strategy
     }
 
+def _classify_hitl_risk(state: BlackboardState) -> Dict[str, Any]:
+    """Deterministic, fail-closed policy classification for human approval."""
+    request = (state.raw_thought or "").strip()
+    lowered = request.lower()
+    signals = []
+    risk = "standard"
+    # Any action that crosses a trust boundary or changes external state needs
+    # explicit approval; the LLM's routing decision is not itself authorization.
+    high_risk_patterns = {
+        "public_posting": r"\\b(post|publish|tweet|upload|send live|go live)\\b",
+        "financial": r"\\b(pay|payment|purchase|buy|transfer|refund|invoice|trade|invest)\\b",
+        "destructive": r"\\b(delete|remove permanently|wipe|drop database|destroy|overwrite)\\b",
+        "deployment": r"\\b(deploy|release to production|production rollout|promote release)\\b",
+        "communications": r"\\b(send email|send message|contact|dm |direct message|notify customer)\\b",
+        "security_or_access": r"\\b(password|api key|secret|credential|permission|grant access|revoke access)\\b",
+    }
+    for label, pattern in high_risk_patterns.items():
+        if re.search(pattern, lowered):
+            signals.append(label)
+    if any(label in signals for label in ("financial", "destructive", "security_or_access")):
+        risk = "critical"
+    elif signals:
+        risk = "high"
+    elif re.search(r"\\b(browser|external website|scrape|download|upload|modify|change settings)\\b", lowered):
+        risk = "elevated"
+        signals.append("external_or_mutating_work")
+    # Always require a human decision for specialist missions; classification
+    # informs the approval card and policy, never silently authorizes execution.
+    return {
+        "risk_level": risk,
+        "risk_signals": signals,
+        "approval_required": True,
+        "policy_version": "hitl-policy-v2",
+    }
+
+
 async def node_hitl_gate(state: BlackboardState) -> Dict:
-    """Phase 2: Human-in-the-Loop Gateway"""
+    """High-assurance HITL gate: explicit scoped approval, structured audit context, fail closed."""
     if "general_chat" in state.next_nodes:
-        # No approval needed for general chat
         return {}
 
-    # Check if user has already provided approval/edits
-    if "(Edit:" in state.raw_thought:
-        return {}
+    policy = _classify_hitl_risk(state)
+    mission_id = state.mission_id or str(uuid.uuid4())
+    skills = list(state.selected_skills or [])
+    strategy = state.founder_strategy.get("summary", "") if isinstance(state.founder_strategy, dict) else ""
+    approval_request = {
+        "type": "HITL_APPROVAL_REQUIRED",
+        "gate_version": "2.0",
+        "mission_id": mission_id,
+        "chat_id": state.chat_id,
+        "request": state.raw_thought[:4000],
+        "proposed_strategy": strategy[:3000],
+        "selected_skills": skills,
+        "risk_level": policy["risk_level"],
+        "risk_signals": policy["risk_signals"],
+        "policy_version": policy["policy_version"],
+        "approval_required": True,
+        "allowed_actions": ["approve", "edit", "cancel"],
+        "approval_scope": "This mission only; any material edit requires a new approval.",
+        "safety_notice": "Approval authorizes the described mission only. It does not grant credentials, bypass provider safeguards, or prove an external action succeeded.",
+    }
 
-    # Pause execution for explicit approval; preserve cancellation as a graph decision.
-    decision = interrupt("Please approve the strategy via Telegram callback.")
-    if isinstance(decision, dict) and decision.get("action") == "cancel":
-        return {"next_nodes": ["cancelled"]}
-    if isinstance(decision, dict) and decision.get("action") not in (None, "approve", "edit"):
-        return {"next_nodes": ["cancelled"]}
-    return {}
+    # LangGraph interrupt must be resumed with a structured decision. Unknown,
+    # malformed, and missing decisions fail closed rather than executing workers.
+    decision = interrupt(approval_request)
+    if not isinstance(decision, dict):
+        return {"next_nodes": ["cancelled"], "final_report": "HITL blocked this mission: a valid structured approval decision was not received."}
+
+    action = str(decision.get("action", "")).strip().lower()
+    decision_mission = decision.get("mission_id")
+    if decision_mission is not None and str(decision_mission) != str(mission_id):
+        return {"next_nodes": ["cancelled"], "final_report": "HITL blocked this mission: approval mission ID mismatch."}
+
+    if action == "approve":
+        # Require explicit boolean confirmation; legacy callbacks that only send
+        # {action: approve} remain supported, but never accept arbitrary actions.
+        if decision.get("approved") is False:
+            return {"next_nodes": ["cancelled"], "final_report": "Mission cancelled: approval was not explicitly confirmed."}
+        return {"hitl_decision": {"action": "approve", "mission_id": mission_id, "policy_version": policy["policy_version"]}}
+
+    if action == "edit":
+        # Editing changes the approved scope. Stop here; caller must submit the
+        # revised natural-language request as a new mission and obtain fresh approval.
+        return {
+            "next_nodes": ["cancelled"],
+            "final_report": "Mission paused safely: edits change the approval scope. Send the revised request as a new mission to generate a fresh approval card.",
+        }
+
+    if action == "cancel":
+        return {"next_nodes": ["cancelled"], "final_report": "Mission cancelled by user. No agent branches were executed."}
+
+    return {
+        "next_nodes": ["cancelled"],
+        "final_report": "HITL blocked this mission: decision was missing or unsupported. No agent branches were executed.",
+    }
 
 def check_supervisor_routing(state: BlackboardState):
     """Route to appropriate nodes based on supervisor decision."""
