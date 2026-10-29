@@ -5,6 +5,7 @@ WORKDIR /app
 # Install system dependencies if required
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -19,6 +20,7 @@ COPY middleware/ middleware/
 COPY workers/ workers/
 COPY scripts/ scripts/
 COPY skills/ skills/
+COPY skills_repos/ skills_repos/
 
 # Bootstrap the 15 skill instruction packages at image build time.
 RUN chmod +x scripts/bootstrap_skills.sh && ./scripts/bootstrap_skills.sh
