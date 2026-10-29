@@ -428,14 +428,54 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 synthesized = base_artifact.strip() or "\\n\\n".join(
                     f"{item['name']}: {item['output']}" for item in completed
                 )
-            return skill_id, {
+            result_payload = {
                 "status": "completed",
                 "output": synthesized,
                 "warning": base_error or "",
                 "subagents": subagent_results,
                 "subagent_count": len(subagents),
                 "subagents_completed": len(completed),
+                "artifacts": [],
             }
+            if skill_id == "youtube-agent-skill":
+                # Convert the team result into typed, durable artifacts rather than a text-only report.
+                structured_prompt = (
+                    "Convert the following YouTube production work into valid JSON only with keys "
+                    "title (string), script (string, complete narration), storyboard (array of objects with "
+                    "scene, narration, visual, on_screen_text), metadata (object with description, titles array, tags array, hashtags array). "
+                    "If a field is missing, create a sensible draft and do not invent live research.\n"
+                    f"User request: {query}\nTeam result:\n{str(synthesized)[:12000]}"
+                )
+                try:
+                    raw = await asyncio.wait_for(router.generate_tier3(structured_prompt), timeout=90)
+                    match = re.search(r"\\{[\\s\\S]*\\}", raw or "")
+                    data = json.loads(match.group(0)) if match else {}
+                    title = str(data.get("title") or "YouTube production draft")
+                    script = str(data.get("script") or synthesized)
+                    storyboard = data.get("storyboard") if isinstance(data.get("storyboard"), list) else []
+                    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+                    from workers.youtube_pipeline import save_production_pack, render_storyboard_draft
+                    import tempfile
+                    root = os.getenv("ARTIFACTS_DIR", os.path.join(tempfile.gettempdir(), "reven-artifacts"))
+                    pack = save_production_pack(root, title, script, storyboard, metadata)
+                    video = render_storyboard_draft(root, title, storyboard)
+                    result_payload["artifacts"] = [pack]
+                    result_payload["video"] = video
+                    result_payload["upload"] = {
+                        "status": "blocked",
+                        "reason": "YouTube upload is not enabled in this workflow. It requires valid OAuth credentials, an upload client, and a confirmed API response."
+                    }
+                    result_payload["output"] = (
+                        f"{synthesized}\\n\\nProduction artifacts: {json.dumps(pack, ensure_ascii=False)}"
+                        f"\\nVideo draft: {json.dumps(video, ensure_ascii=False)}"
+                        "\\nYouTube upload: BLOCKED until OAuth upload integration is configured and verified."
+                    )
+                except Exception as exc:
+                    logger.exception("YouTube artifact pipeline failed")
+                    result_payload["status"] = "partial"
+                    result_payload["artifact_error"] = type(exc).__name__
+                    result_payload["output"] = f"{synthesized}\\n\\nArtifact pipeline failed: {type(exc).__name__}; no video/upload is claimed."
+            return skill_id, result_payload
 
         results = await asyncio.gather(*(run_one(skill_id) for skill_id in wave), return_exceptions=True)
         for skill_id, result in zip(wave, results):
