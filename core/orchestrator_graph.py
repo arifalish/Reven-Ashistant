@@ -70,12 +70,12 @@ def _classify_hitl_risk(state: BlackboardState) -> Dict[str, Any]:
     # Any action that crosses a trust boundary or changes external state needs
     # explicit approval; the LLM's routing decision is not itself authorization.
     high_risk_patterns = {
-        "public_posting": r"\\b(post|publish|tweet|upload|send live|go live)\\b",
-        "financial": r"\\b(pay|payment|purchase|buy|transfer|refund|invoice|trade|invest)\\b",
-        "destructive": r"\\b(delete|remove permanently|wipe|drop database|destroy|overwrite)\\b",
-        "deployment": r"\\b(deploy|release to production|production rollout|promote release)\\b",
-        "communications": r"\\b(send email|send message|contact|dm |direct message|notify customer)\\b",
-        "security_or_access": r"\\b(password|api key|secret|credential|permission|grant access|revoke access)\\b",
+        "public_posting": r"\b(post|publish|tweet|upload|send live|go live)\b",
+        "financial": r"\b(pay|payment|purchase|buy|transfer|refund|invoice|trade|invest)\b",
+        "destructive": r"\b(delete|remove permanently|wipe|drop database|destroy|overwrite)\b",
+        "deployment": r"\b(deploy|release to production|production rollout|promote release)\b",
+        "communications": r"\b(send email|send message|contact|dm |direct message|notify customer)\b",
+        "security_or_access": r"\b(password|api key|secret|credential|permission|grant access|revoke access)\b",
     }
     for label, pattern in high_risk_patterns.items():
         if re.search(pattern, lowered):
@@ -84,7 +84,7 @@ def _classify_hitl_risk(state: BlackboardState) -> Dict[str, Any]:
         risk = "critical"
     elif signals:
         risk = "high"
-    elif re.search(r"\\b(browser|external website|scrape|download|upload|modify|change settings)\\b", lowered):
+    elif re.search(r"\b(browser|external website|scrape|download|upload|modify|change settings)\b", lowered):
         risk = "elevated"
         signals.append("external_or_mutating_work")
     # Always require a human decision for specialist missions; classification
