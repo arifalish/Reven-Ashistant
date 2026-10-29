@@ -17,3 +17,5 @@ pyyaml==6.0.2
 browser-use>=0.13.11
 playwright
 langchain-openai
+google-api-python-client>=2.150.0
+google-auth>=2.35.0
