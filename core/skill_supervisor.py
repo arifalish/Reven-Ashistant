@@ -448,7 +448,7 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 )
                 try:
                     raw = await asyncio.wait_for(router.generate_tier3(structured_prompt), timeout=90)
-                    match = re.search(r"\\{[\\s\\S]*\\}", raw or "")
+                    match = re.search(r"\{[\s\S]*\}", raw or "")
                     data = json.loads(match.group(0)) if match else {}
                     title = str(data.get("title") or "YouTube production draft")
                     script = str(data.get("script") or synthesized)
