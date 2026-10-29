@@ -39,6 +39,9 @@ class BlackboardState(BaseModel):
     skill_plan_reasoning: str = Field(default="")
     skill_results: Dict[str, Any] = Field(default_factory=dict)
 
+    # HITL audit decision is persisted with the mission state.
+    hitl_decision: Dict[str, Any] = Field(default_factory=dict)
+
     # Stores the final structured content ready for RAM ZIP Packager
     final_artifacts: Dict[str, Any] = Field(default_factory=dict)
     # Dynamic Routing & Reporting
