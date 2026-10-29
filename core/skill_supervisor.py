@@ -454,21 +454,26 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                     script = str(data.get("script") or synthesized)
                     storyboard = data.get("storyboard") if isinstance(data.get("storyboard"), list) else []
                     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-                    from workers.youtube_pipeline import save_production_pack, render_storyboard_draft
+                    from workers.youtube_pipeline import save_production_pack, render_storyboard_draft, upload_to_youtube
                     import tempfile
                     root = os.getenv("ARTIFACTS_DIR", os.path.join(tempfile.gettempdir(), "reven-artifacts"))
                     pack = save_production_pack(root, title, script, storyboard, metadata)
                     video = render_storyboard_draft(root, title, storyboard)
                     result_payload["artifacts"] = [pack]
                     result_payload["video"] = video
-                    result_payload["upload"] = {
-                        "status": "blocked",
-                        "reason": "YouTube upload is not enabled in this workflow. It requires valid OAuth credentials, an upload client, and a confirmed API response."
-                    }
+                    if video.get("status") == "rendered_draft":
+                        result_payload["upload"] = upload_to_youtube(
+                            video["video_path"], {**metadata, "title": title}
+                        )
+                    else:
+                        result_payload["upload"] = {
+                            "status": "blocked",
+                            "reason": "Upload requires a successfully rendered non-empty MP4."
+                        }
                     result_payload["output"] = (
                         f"{synthesized}\\n\\nProduction artifacts: {json.dumps(pack, ensure_ascii=False)}"
                         f"\\nVideo draft: {json.dumps(video, ensure_ascii=False)}"
-                        "\\nYouTube upload: BLOCKED until OAuth upload integration is configured and verified."
+                        "\\nYouTube upload status: " + json.dumps(result_payload["upload"], ensure_ascii=False)
                     )
                 except Exception as exc:
                     logger.exception("YouTube artifact pipeline failed")
