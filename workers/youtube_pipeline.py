@@ -54,3 +54,43 @@ def render_storyboard_draft(output_dir: str, title: str, storyboard: list[dict[s
         return {"status": "rendered_draft", "video_path": str(mp4), "bytes": mp4.stat().st_size, "scenes": len(clips), "note": "Silent storyboard-card draft; not a narrated final video."}
     except Exception as exc:
         return {"status": "failed", "reason": type(exc).__name__}
+
+
+def upload_to_youtube(video_path: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    """Upload only when a valid user-authorized OAuth token file is configured."""
+    import os
+    token_file = os.getenv("YOUTUBE_OAUTH_TOKEN_FILE", "").strip()
+    if not token_file or not Path(token_file).is_file():
+        return {"status": "blocked", "reason": "Set YOUTUBE_OAUTH_TOKEN_FILE to a valid user-authorized YouTube OAuth token JSON file."}
+    if not Path(video_path).is_file() or Path(video_path).stat().st_size == 0:
+        return {"status": "blocked", "reason": "A non-empty rendered video file is required before upload."}
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+        credentials = Credentials.from_authorized_user_file(
+            token_file,
+            scopes=["https://www.googleapis.com/auth/youtube.upload"],
+        )
+        youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
+        body = {
+            "snippet": {
+                "title": str(metadata.get("title") or Path(video_path).stem)[:100],
+                "description": str(metadata.get("description") or "Created with Reven Assistant")[:5000],
+                "tags": [str(x)[:100] for x in metadata.get("tags", [])[:30]],
+                "categoryId": str(metadata.get("categoryId") or "22"),
+            },
+            "status": {"privacyStatus": str(metadata.get("privacyStatus") or "private")},
+        }
+        request = youtube.videos().insert(
+            part="snippet,status",
+            body=body,
+            media_body=MediaFileUpload(video_path, mimetype="video/mp4", resumable=True),
+        )
+        response = request.execute()
+        video_id = response.get("id")
+        if not video_id:
+            return {"status": "failed", "reason": "YouTube API returned no video ID."}
+        return {"status": "uploaded", "video_id": video_id, "url": f"https://www.youtube.com/watch?v={video_id}", "privacy_status": body["status"]["privacyStatus"]}
+    except Exception as exc:
+        return {"status": "failed", "reason": type(exc).__name__}
