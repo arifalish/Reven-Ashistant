@@ -15,6 +15,7 @@ write_skill() {
   local guardrails="$5"
   local dir="$SKILLS_DIR/$slug"
   mkdir -p "$dir/templates" "$dir/skills"
+  if [[ ! -f "$dir/SKILL.md" ]]; then
   cat > "$dir/SKILL.md" <<EOF
 # $title
 
@@ -34,9 +35,12 @@ $workflow
 ## Safety and quality
 $guardrails
 EOF
+  fi
+  if [[ ! -f "$dir/templates/voice.md" ]]; then
   cat > "$dir/templates/voice.md" <<EOF
 Use concise, specific, professional language. Prefer structured outputs and actionable next steps. Never invent evidence, metrics, sources, or completed actions.
 EOF
+  fi
 }
 
 write_skill "instagram-agent-skill" "Instagram Content Agent" "Create Instagram Reels and posts that fit the target audience and objective." "Identify audience and hook; write a short script, caption, CTA and relevant hashtag suggestions; note any assumptions." "Avoid engagement bait, misleading claims and unlicensed content."
