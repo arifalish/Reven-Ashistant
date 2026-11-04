@@ -19,6 +19,29 @@ telegram_bot = TelegramBot(settings.TELEGRAM_BOT_TOKEN)
 _worker_tasks = []
 _chat_locks = {}
 
+
+async def sync_arif_ai_event(mission_id: str, title: str, event: str, **extra):
+    """Best-effort authenticated event bridge to the ARIF AI command center."""
+    base = os.getenv("ARIF_AI_SYNC_URL", "").rstrip("/")
+    secret = os.getenv("ARIF_AI_SYNC_SECRET", "")
+    if not base or not secret:
+        return
+    payload = {"missionId": str(mission_id), "title": str(title)[:500], "event": event, **extra}
+    def _send():
+        import urllib.request
+        request = urllib.request.Request(
+            base + "/api/v1/internal/reven/events",
+            data=json.dumps(payload, default=str).encode("utf-8"),
+            headers={"Content-Type": "application/json", "X-ARIF-SYNC-SECRET": secret},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return response.status
+    try:
+        await asyncio.to_thread(_send)
+    except Exception as exc:
+        print(f"ARIF AI sync warning ({event}): {exc}")
+
 async def _handle_telegram_update(task: QueuedTask):
     """Run one Telegram update; serialize updates per chat while allowing other chats in parallel."""
     payload = task.payload.get("update")
@@ -142,6 +165,8 @@ async def process_mission(payload: dict):
     if isinstance(payload.get("message"), dict) and (payload["message"].get("text") or payload["message"].get("caption")):
         chat_id = payload["message"]["chat"]["id"]
         text = payload["message"].get("text") or payload["message"].get("caption")
+        mission_sync_id = "telegram-" + str(payload.get("update_id", uuid.uuid4()))
+        await sync_arif_ai_event(mission_sync_id, text, "mission.started", agents=["reven-supervisor"])
 
         # We may receive message_id from cloudflare worker, or we might need to send one ourselves
         message_id = payload.get("mission_control_message_id")
@@ -179,6 +204,7 @@ async def process_mission(payload: dict):
             elif isinstance(result_payload, str) and result_payload.strip() and result_payload != "Please approve the strategy via Telegram callback.":
                 # General chat completes immediately; it must not be shown an approval keyboard.
                 await telegram_bot.send_message(chat_id=chat_id, text=result_payload[:4000])
+                await sync_arif_ai_event(mission_sync_id, text, "mission.completed", result={"summary": result_payload[:3500]})
                 await telegram_bot.update_status(
                     chat_id=chat_id,
                     message_id=message_id,
@@ -193,6 +219,7 @@ async def process_mission(payload: dict):
                         [{"text": "🛑 Cancel", "callback_data": "cancel"}]
                     ]
                 }
+                await sync_arif_ai_event(mission_sync_id, text, "mission.approval_required", agents=["reven-supervisor"])
                 await telegram_bot.update_status(
                     chat_id=chat_id,
                     message_id=message_id,
@@ -201,6 +228,7 @@ async def process_mission(payload: dict):
                 )
 
         except Exception as e:
+            await sync_arif_ai_event(mission_sync_id, text, "mission.failed", result={"error": str(e)[:1000]})
             await telegram_bot.update_status(
                 chat_id=chat_id,
                 message_id=message_id,
