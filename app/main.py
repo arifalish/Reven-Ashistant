@@ -22,9 +22,11 @@ _chat_locks = {}
 
 async def sync_arif_ai_event(mission_id: str, title: str, event: str, **extra):
     """Best-effort authenticated event bridge to the ARIF AI command center."""
-    base = os.getenv("ARIF_AI_SYNC_URL", "").rstrip("/")
+    base = (os.getenv("ARIF_AI_SYNC_URL") or "https://arif-ai-command-center.onrender.com").rstrip("/")
     secret = os.getenv("ARIF_AI_SYNC_SECRET", "")
-    if not base or not secret:
+    if not secret:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("ARIF AI event bridge is not configured; event %s was not delivered", event)
         return
     payload = {"missionId": str(mission_id), "title": str(title)[:500], "event": event, **extra}
     def _send():
@@ -40,7 +42,8 @@ async def sync_arif_ai_event(mission_id: str, title: str, event: str, **extra):
     try:
         await asyncio.to_thread(_send)
     except Exception as exc:
-        print(f"ARIF AI sync warning ({event}): {exc}")
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("ARIF AI sync warning (%s): %s", event, type(exc).__name__)
 
 async def _handle_telegram_update(task: QueuedTask):
     """Run one Telegram update; serialize updates per chat while allowing other chats in parallel."""
