@@ -169,17 +169,17 @@ async def web_create_mission(request: Request):
         raise HTTPException(status_code=502, detail="Reven mission start failed: " + type(exc).__name__)
 
 
-async def _run_web_approved_mission(mission_id: str, chat_id: int):
+async def _run_web_approved_mission(mission_id: str, chat_id: int, title: str):
     try:
         result = await resume_orchestrator(chat_id, {"action": "approve", "approved": True})
         if isinstance(result, str) and result.strip():
-            await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.completed", result={"summary": result[:3500]})
+            await sync_arif_ai_event(mission_id, title, "mission.completed", result={"summary": result[:3500]})
         elif isinstance(result, dict):
-            await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.failed", result={"error": "Worker paused for additional input", "details": str(result)[:1200]})
+            await sync_arif_ai_event(mission_id, title, "mission.failed", result={"error": "Worker paused for additional input", "details": str(result)[:1200]})
         else:
-            await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.failed", result={"error": "No final report returned"})
+            await sync_arif_ai_event(mission_id, title, "mission.failed", result={"error": "No final report returned"})
     except Exception as exc:
-        await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.failed", result={"error": str(exc)[:1000]})
+        await sync_arif_ai_event(mission_id, title, "mission.failed", result={"error": str(exc)[:1000]})
         print(f"Web mission execution failed ({mission_id}): {type(exc).__name__}: {exc}")
 
 
@@ -194,7 +194,12 @@ async def web_approve_mission(mission_id: str, request: Request, background_task
         chat_id = int(uuid.UUID(mission_id).int % (2**63 - 1))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid mission_id")
-    background_tasks.add_task(_run_web_approved_mission, mission_id, chat_id)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    title = str(body.get("title") or "Dashboard mission")[:500]
+    background_tasks.add_task(_run_web_approved_mission, mission_id, chat_id, title)
     return {"status": "running", "mission_id": mission_id, "message": "Approved. Reven worker execution has been queued."}
 
 
