@@ -142,6 +142,18 @@ def deterministic_skill_plan(query: str) -> List[str]:
     text = (query or "").strip()
     if not text:
         return ["master-skills"]
+    # Explicit browser navigation/action requests take precedence over content skills.
+    browser_action = re.search(
+        r"\\b(open|visit|go to|navigate to|browse|search on|click|scroll|watch|play|"
+        r"download|inspect|fill|extract from|read this website)\\b", text, re.I
+    )
+    browser_target = re.search(
+        r"\\b(youtube|google|facebook|instagram|linkedin|x\\.com|twitter|website|web page|browser)\\b",
+        text, re.I
+    )
+    if browser_action and browser_target:
+        return ["browser-agent-skill"]
+
     selected = [
         skill_id for skill_id, meta in SKILL_REGISTRY.items()
         if re.search(meta["keywords"], text, re.I)
@@ -299,35 +311,22 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 }
 
             if skill_id == "browser-agent-skill":
-                from skills.browser_agent import run_browser_task
-                # The LangGraph Telegram HITL gate has already required mission approval.
-                # Browser actions may navigate and fill requested fields, but the browser
-                # worker independently blocks irreversible final actions pending a separate
-                # explicit confirmation workflow.
+                from skills.browser_agent import execute_browser_job
                 chat_id = str(worker_context.get("chat_id", "default"))
                 profile_id = "reven_chat_" + re.sub(r"[^a-zA-Z0-9_-]", "_", chat_id)[:48]
-                browser_result = await asyncio.to_thread(
-                    run_browser_task.invoke,
-                    {
-                        "task": query,
-                        "context": worker_context,
-                        "headless": True,
-                        "profile_id": profile_id,
-                        "max_steps": int(os.getenv("BROWSER_MAX_STEPS", "18")),
-                    },
+                browser_result = await execute_browser_job(
+                    task=query,
+                    context=worker_context,
+                    profile_id=profile_id,
+                    max_steps=int(os.getenv("BROWSER_MAX_STEPS", "18")),
                 )
-                browser_text = str(browser_result)
-                failed = browser_text.startswith("Browser task failed:")
-                specialist_results = await execute_specialists(browser_text)
-                completed = sum(item["status"] == "completed" for item in specialist_results)
+                # Browser evidence is the primary artifact. Do not turn a failed browser
+                # run into a fabricated success through generic LLM specialist output.
                 return skill_id, {
-                    "status": "failed" if failed else "completed",
-                    "output": browser_text,
-                    "subagents": specialist_results,
-                    "subagent_count": len(specialist_results),
-                    "subagents_completed": completed,
-                    "execution_mode": "supervised_browser",
-                    "approval_required_for_final_action": "CONFIRMATION REQUIRED" in browser_text,
+                    **browser_result,
+                    "subagents": [],
+                    "subagent_count": 0,
+                    "subagents_completed": 0,
                 }
 
             # Execute the original skill package first, preserving its tools/workflow.
