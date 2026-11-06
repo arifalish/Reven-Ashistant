@@ -31,7 +31,7 @@ async def test_end_to_end_orchestrator():
     # 1. Run orchestrator Phase 1 (Ingestion) -> should return interrupt value and pause at HITL
     print("\n[Test] Running Phase 1 (Ingestion)...")
     res1 = await run_orchestrator(raw_thought, chat_id, message_id)
-    assert res1 == "Please approve the strategy via Telegram callback.", "Initial run should return interrupt string"
+    assert isinstance(res1, dict), "Initial run should return the structured HITL approval request"\n    assert res1.get("type") == "HITL_APPROVAL_REQUIRED"\n    assert res1.get("approval_required") is True\n    assert "approve" in res1.get("allowed_actions", [])
 
     # 2. Resume with Approval (Phase 3 & 4)
     print("[Test] Resuming with Approval payload...")
