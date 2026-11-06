@@ -60,7 +60,8 @@ def _llm_config():
 
 def _safe_task(task: str) -> tuple[str, bool]:
     """Constrain final irreversible steps even after the mission-level approval."""
-    irreversible = bool(IRREVERSIBLE_PATTERNS.search(task or ""))
+    normalized = re.sub(r"\b(?:do not|don't|never)\s+(?:submit|send|publish|post|purchase|buy|pay|transfer|delete|remove)\b", "", task or "", flags=re.IGNORECASE)
+    irreversible = bool(IRREVERSIBLE_PATTERNS.search(normalized))
     policy = (
         "\n\nWEB BRIDGE SAFETY POLICY:\n"
         "- You may navigate pages, read public information, search, click ordinary navigation controls, "
