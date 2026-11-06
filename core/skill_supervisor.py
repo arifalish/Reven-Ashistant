@@ -29,7 +29,7 @@ SKILL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "sales-desk-skill": {"department": "growth", "description": "Personalized B2B outreach, cold emails and follow-up sequences from supplied leads.", "keywords": r"cold email|outreach|sales|lead generation|prospect"},
     "humanizer-core-skill": {"department": "content", "description": "Improve naturalness and clarity without changing facts, identifiers or data.", "keywords": r"humanize|natural wording|human-like"},
     "seo-agent-skill": {"department": "growth", "description": "SEO intent, keyword clusters, on-page recommendations and competitor analysis.", "keywords": r"seo|keyword|search ranking|organic traffic"},
-    "browser-agent-skill": {"department": "workspace", "description": "Plan or perform browser workflows using connected browser tools; state clearly when a tool is unavailable.", "keywords": r"website|browse|browser|latest news|open website|scrape website|visit site"},
+    "browser-agent-skill": {"department": "workspace", "description": "Plan or perform browser workflows using connected browser tools; state clearly when a tool is unavailable.", "keywords": r"website|browse|browser|latest news|open website|scrape website|visit site|open (?:youtube|google|facebook|instagram|linkedin|x\.com|twitter)|go to (?:youtube|google|facebook|instagram|linkedin)|navigate to|watch .*youtube|play .*song|play .*video"},
     "opendots-coworker-skill": {"department": "workspace", "description": "Break long-running workspace tasks into operational steps and use configured coworker tools.", "keywords": r"autonomous|coworker|long.running|shell|docker|workspace"},
 }
 
