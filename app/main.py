@@ -166,9 +166,23 @@ async def web_create_mission(request: Request):
         raise HTTPException(status_code=502, detail="Reven mission start failed: " + type(exc).__name__)
 
 
+async def _run_web_approved_mission(mission_id: str, chat_id: int):
+    try:
+        result = await resume_orchestrator(chat_id, {"action": "approve", "approved": True})
+        if isinstance(result, str) and result.strip():
+            await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.completed", result={"summary": result[:3500]})
+        elif isinstance(result, dict):
+            await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.failed", result={"error": "Worker paused for additional input", "details": str(result)[:1200]})
+        else:
+            await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.failed", result={"error": "No final report returned"})
+    except Exception as exc:
+        await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.failed", result={"error": str(exc)[:1000]})
+        print(f"Web mission execution failed ({mission_id}): {type(exc).__name__}: {exc}")
+
+
 @app.post("/api/v1/web/missions/{mission_id}/approve")
-async def web_approve_mission(mission_id: str, request: Request):
-    """Resume the dashboard mission after explicit scoped approval."""
+async def web_approve_mission(mission_id: str, request: Request, background_tasks: BackgroundTasks):
+    """Queue the approved dashboard mission for worker execution."""
     expected = os.getenv("ARIF_AI_SYNC_SECRET", "")
     supplied = request.headers.get("X-ARIF-SYNC-SECRET", "")
     if not expected or not supplied or not __import__("hmac").compare_digest(expected, supplied):
@@ -177,19 +191,8 @@ async def web_approve_mission(mission_id: str, request: Request):
         chat_id = int(uuid.UUID(mission_id).int % (2**63 - 1))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid mission_id")
-    try:
-        result = await resume_orchestrator(chat_id, {"action": "approve", "approved": True})
-        if isinstance(result, str) and result.strip():
-            await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.completed",
-                                     result={"summary": result[:3500]})
-            return {"status": "completed", "mission_id": mission_id, "result": result}
-        if isinstance(result, dict):
-            return {"status": "awaiting_input", "mission_id": mission_id, "result": result}
-        return {"status": "running", "mission_id": mission_id, "result": str(result or "")}
-    except Exception as exc:
-        await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.failed",
-                                 result={"error": str(exc)[:1000]})
-        raise HTTPException(status_code=502, detail="Reven mission execution failed: " + type(exc).__name__)
+    background_tasks.add_task(_run_web_approved_mission, mission_id, chat_id)
+    return {"status": "running", "mission_id": mission_id, "message": "Approved. Reven worker execution has been queued."}
 
 
 @app.post("/api/v1/orchestrate")
