@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 IRREVERSIBLE_PATTERNS = re.compile(
     r"\b(submit|send|publish|post\s+(?:this|it|the)|purchase|buy|checkout|pay|payment|"
     r"transfer|delete|remove|cancel\s+(?:account|subscription|booking)|confirm\s+order|"
-    r"place\s+order|finali[sz]e|sign\s+and\s+submit)\b",
+    r"place\s+(?:the\s+)?order|finali[sz]e|sign\s+and\s+submit)\b",
     re.IGNORECASE,
 )
 
