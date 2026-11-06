@@ -114,6 +114,46 @@ async def _execute(task: str, context: Optional[Dict[str, Any]], headless: bool,
         except Exception:
             logger.exception("Browser session close failed")
 
+async def execute_browser_job(
+    task: str,
+    context: Optional[Dict[str, Any]] = None,
+    profile_id: str = "default_agent_profile",
+    max_steps: int = 18,
+) -> Dict[str, Any]:
+    """Async structured browser execution for LangGraph workers."""
+    try:
+        output = await asyncio.wait_for(
+            _execute(task, context, True, profile_id, max_steps),
+            timeout=float(os.getenv("BROWSER_TASK_TIMEOUT_SECONDS", "240")),
+        )
+        confirmation = "CONFIRMATION REQUIRED" in output
+        return {
+            "status": "awaiting_approval" if confirmation else "completed",
+            "output": output,
+            "error": None,
+            "execution_mode": "playwright_browser",
+            "confirmation_required": confirmation,
+        }
+    except asyncio.TimeoutError:
+        logger.exception("Browser task timed out")
+        return {
+            "status": "failed",
+            "output": "",
+            "error": "Browser task timed out",
+            "execution_mode": "playwright_browser",
+            "confirmation_required": False,
+        }
+    except Exception as exc:
+        logger.exception("Browser task failed")
+        return {
+            "status": "failed",
+            "output": "",
+            "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+            "execution_mode": "playwright_browser",
+            "confirmation_required": False,
+        }
+
+
 @tool("run_browser_task", args_schema=BrowserTaskInput)
 def run_browser_task(
     task: str,
