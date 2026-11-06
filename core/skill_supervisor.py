@@ -299,26 +299,35 @@ async def execute_skill_plan(query: str, selected_skills: List[str] | None = Non
                 }
 
             if skill_id == "browser-agent-skill":
-                if not (os.getenv("NVIDIA_API_KEY") or os.getenv("NVIDIA_API_KEYS")):
-                    return skill_id, {"status": "failed", "error": "NVIDIA_API_KEY is not configured; browser task was not run.", "subagents": []}
                 from skills.browser_agent import run_browser_task
-                browser_task = (
-                    f"Research this request using read-only browser actions where possible: {query}. "
-                    "Return the URLs visited, current factual findings, and any uncertainty. "
-                    "Do not submit forms, send messages, purchase items, or make irreversible changes."
-                )
+                # The LangGraph Telegram HITL gate has already required mission approval.
+                # Browser actions may navigate and fill requested fields, but the browser
+                # worker independently blocks irreversible final actions pending a separate
+                # explicit confirmation workflow.
+                chat_id = str(worker_context.get("chat_id", "default"))
+                profile_id = "reven_chat_" + re.sub(r"[^a-zA-Z0-9_-]", "_", chat_id)[:48]
                 browser_result = await asyncio.to_thread(
                     run_browser_task.invoke,
-                    {"task": browser_task, "context": worker_context, "headless": True},
+                    {
+                        "task": query,
+                        "context": worker_context,
+                        "headless": True,
+                        "profile_id": profile_id,
+                        "max_steps": int(os.getenv("BROWSER_MAX_STEPS", "18")),
+                    },
                 )
-                specialist_results = await execute_specialists(str(browser_result))
+                browser_text = str(browser_result)
+                failed = browser_text.startswith("Browser task failed:")
+                specialist_results = await execute_specialists(browser_text)
                 completed = sum(item["status"] == "completed" for item in specialist_results)
                 return skill_id, {
-                    "status": "completed" if completed else "failed",
-                    "output": str(browser_result),
+                    "status": "failed" if failed else "completed",
+                    "output": browser_text,
                     "subagents": specialist_results,
                     "subagent_count": len(specialist_results),
                     "subagents_completed": completed,
+                    "execution_mode": "supervised_browser",
+                    "approval_required_for_final_action": "CONFIRMATION REQUIRED" in browser_text,
                 }
 
             # Execute the original skill package first, preserving its tools/workflow.
