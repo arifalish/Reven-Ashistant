@@ -130,6 +130,68 @@ async def process_scraper_callback(mission_id: str, csv_data: str):
     # Notify user if needed (omitted for brevity, assume handled by graph aggregator)
 
 
+
+@app.post("/api/v1/web/missions")
+async def web_create_mission(request: Request):
+    """Start a dashboard-originated mission and pause at the same LangGraph HITL gate."""
+    expected = os.getenv("ARIF_AI_SYNC_SECRET", "")
+    supplied = request.headers.get("X-ARIF-SYNC-SECRET", "")
+    if not expected or not supplied or not __import__("hmac").compare_digest(expected, supplied):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    mission_id = str(body.get("mission_id", "")).strip()
+    title = str(body.get("title", "")).strip()
+    if not mission_id or len(mission_id) > 120 or not title or len(title) > 4000:
+        raise HTTPException(status_code=400, detail="mission_id and title are required")
+    try:
+        chat_id = int(uuid.UUID(mission_id).int % (2**63 - 1))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="mission_id must be a UUID")
+    await sync_arif_ai_event(mission_id, title, "mission.started", agents=["reven-supervisor"])
+    try:
+        result = await run_orchestrator(title, chat_id, 0)
+        if isinstance(result, dict) and result.get("type") == "HITL_APPROVAL_REQUIRED":
+            await sync_arif_ai_event(mission_id, title, "mission.approval_required",
+                                     agents=result.get("selected_skills", []), plan=result)
+            return {"status": "awaiting_approval", "mission_id": mission_id, "approval": result}
+        if isinstance(result, str):
+            await sync_arif_ai_event(mission_id, title, "mission.completed", result={"summary": result[:3500]})
+            return {"status": "completed", "mission_id": mission_id, "result": result}
+        return {"status": "blocked", "mission_id": mission_id, "result": result}
+    except Exception as exc:
+        await sync_arif_ai_event(mission_id, title, "mission.failed", result={"error": str(exc)[:1000]})
+        raise HTTPException(status_code=502, detail="Reven mission start failed: " + type(exc).__name__)
+
+
+@app.post("/api/v1/web/missions/{mission_id}/approve")
+async def web_approve_mission(mission_id: str, request: Request):
+    """Resume the dashboard mission after explicit scoped approval."""
+    expected = os.getenv("ARIF_AI_SYNC_SECRET", "")
+    supplied = request.headers.get("X-ARIF-SYNC-SECRET", "")
+    if not expected or not supplied or not __import__("hmac").compare_digest(expected, supplied):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        chat_id = int(uuid.UUID(mission_id).int % (2**63 - 1))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid mission_id")
+    try:
+        result = await resume_orchestrator(chat_id, {"action": "approve", "approved": True})
+        if isinstance(result, str) and result.strip():
+            await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.completed",
+                                     result={"summary": result[:3500]})
+            return {"status": "completed", "mission_id": mission_id, "result": result}
+        if isinstance(result, dict):
+            return {"status": "awaiting_input", "mission_id": mission_id, "result": result}
+        return {"status": "running", "mission_id": mission_id, "result": str(result or "")}
+    except Exception as exc:
+        await sync_arif_ai_event(mission_id, "Dashboard mission", "mission.failed",
+                                 result={"error": str(exc)[:1000]})
+        raise HTTPException(status_code=502, detail="Reven mission execution failed: " + type(exc).__name__)
+
+
 @app.post("/api/v1/orchestrate")
 async def orchestrate(request: Request):
     """Validate and enqueue Telegram webhook updates for async worker execution."""
