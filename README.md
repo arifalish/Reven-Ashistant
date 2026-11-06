@@ -23,6 +23,18 @@ Natural-language multi-agent assistant built with FastAPI, LangGraph and a centr
 - **Memory:** LangGraph checkpoints are stored in `/tmp`; Redis/Firestore persistence is optional.
 - **Skill definitions:** the Docker build bootstraps specialized `SKILL.md` instructions for all 15 skills.
 
+## Full Web Bridge
+
+The registered `browser-agent-skill` is connected to `skills/browser_agent.py` and reuses the provider credentials already configured for Reven:
+- NVIDIA-compatible credentials from `NVIDIA_API_KEY` / `NVIDIA_API_KEYS` and the existing router base URL; or
+- `OPENROUTER_API_KEY` when configured (browser model defaults to `openrouter/free`).
+
+No separate browser AI key or Telegram bot is required. Telegram's existing mission-level approval gate runs before the skill swarm. Browser tasks use a per-chat profile ID and a bounded step count (`BROWSER_MAX_STEPS`, default 18, maximum 35).
+
+The browser worker can navigate, research, click ordinary navigation, fill non-final form fields, and perform explicitly requested file uploads. It must stop before final/irreversible actions such as form submission, sending, publishing, purchasing, payment, transfers, deletion, account cancellation or signing. CAPTCHA, MFA and other access controls are not bypassed.
+
+For reliable authenticated sessions across Render restarts, configure persistent storage or a supported remote browser session provider. The current Render container's local browser profile may be ephemeral; do not assume login cookies survive redeploys. The current headless worker does not provide a live visual browser handoff to solve OTP/CAPTCHA inside Telegram.
+
 ## Operational boundaries
 
 - The task queue is process-local. Jobs can be lost on restart and are not shared between Render instances. Use a durable Redis-backed queue before scaling to multiple instances.
