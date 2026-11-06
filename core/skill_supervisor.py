@@ -144,11 +144,11 @@ def deterministic_skill_plan(query: str) -> List[str]:
         return ["master-skills"]
     # Explicit browser navigation/action requests take precedence over content skills.
     browser_action = re.search(
-        r"\\b(open|visit|go to|navigate to|browse|search on|click|scroll|watch|play|"
-        r"download|inspect|fill|extract from|read this website)\\b", text, re.I
+        r"\b(open|visit|go to|navigate to|browse|search on|click|scroll|watch|play|"
+        r"download|inspect|fill|extract from|read this website)\b", text, re.I
     )
     browser_target = re.search(
-        r"\\b(youtube|google|facebook|instagram|linkedin|x\\.com|twitter|website|web page|browser)\\b",
+        r"\b(youtube|google|facebook|instagram|linkedin|x\.com|twitter|website|web page|browser)\b",
         text, re.I
     )
     if browser_action and browser_target:
